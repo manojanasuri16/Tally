@@ -79,5 +79,10 @@ dependencies {
     implementation(libs.fragment.ktx)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.splashscreen)
+    // Scanning a family code: CameraX for the preview and frames, ZXing's pure-Java decoder (no Play Services).
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.zxing.core)
     testImplementation(libs.junit)
 }

@@ -54,7 +54,7 @@ import kotlinx.coroutines.launch
 /* The root screen and the routes of the loan screens. */
 
 const val ROUTE_LOAN = "loan/{id}"
-/** The Family page (members, invite, join, language, lock). A placeholder is registered here; the screen is built elsewhere. */
+/** The Family page (members, invite, join, language, lock); registered by familyGraph() in ui/family/FamilyScreen.kt. */
 const val ROUTE_FAMILY = "family"
 
 fun openLoan(id: String) = AppNav.go("loan/$id")
@@ -65,7 +65,6 @@ fun NavGraphBuilder.loansGraph() {
     composable(ROUTE_LOAN, arguments = listOf(navArgument("id") { type = NavType.StringType })) { e ->
         LoanDetailScreen(e.arguments?.getString("id").orEmpty())
     }
-    composable(ROUTE_FAMILY) { FamilyPlaceholder() }
 }
 
 @Composable
@@ -73,15 +72,6 @@ private fun RootScreen() {
     val rev = rememberLedger()
     val named = remember(rev) { DB.o("me")?.s("name").orEmpty().isNotBlank() }
     Crossfade(named, animationSpec = tween(220), label = "root") { if (it) LoansScreen() else WelcomeScreen() }
-}
-
-@Composable
-private fun FamilyPlaceholder() {
-    SubScreen(t("family.title", "Family")) { pad ->
-        Column(Modifier.padding(pad).fillMaxSize()) {
-            EmptyState(t("family.soon", "The family page arrives in the next update."), icon = Icons.Rounded.Group)
-        }
-    }
 }
 
 // ---------- welcome ----------

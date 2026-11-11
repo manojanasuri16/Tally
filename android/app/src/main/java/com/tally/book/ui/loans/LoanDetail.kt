@@ -114,7 +114,8 @@ private fun LoanBody(id: String, d: Detail) {
                 d.docs.forEach { f ->
                     item(Space60) {
                         ARow(
-                            f.s("name"), sub = fileSizeLabel(f.num("size")), icon = Icons.Rounded.Description, tint = Apple.colors.accent,
+                            f.s("name"), sub = if (FileFetch.isBusy(f.s("id"))) t("doc.getting", "Getting the file…") else fileSizeLabel(f.num("size")),
+                            icon = Icons.Rounded.Description, tint = Apple.colors.accent,
                             onClick = { scope.launch { openStoredFile(ctx, f) } },
                             trailing = {
                                 BarIcon(Icons.Rounded.DeleteOutline, t("doc.deleteNamed", "Delete {name}", "name" to f.s("name")), {

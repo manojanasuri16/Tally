@@ -248,7 +248,7 @@ object LockFlow {
         if (!Bio.on() || s.busy) return
         val msg0 = s.msg
         s.say(t("lock.checking", "Checking…"))
-        val r = Bio.open(act, t("lock.unlockBalance", "Unlock Balance"))
+        val r = Bio.open(act, t("lock.unlockBalance", "Unlock Tally"))
         val c = r.getOrNull()
         if (c != null) {
             if (c.s("s") == env.s("s") && !(env.s("t").ifEmpty { "pin" } == "pin" && n(env["l"]) == 0.0)) {

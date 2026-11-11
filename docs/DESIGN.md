@@ -102,7 +102,9 @@ Refinements in `sync/`:
 
 Making a shared loan private pushes tombstones for the loan, its payments and its files, and keeps the local copies. Making a private loan shared marks them all dirty.
 
-Sync runs only when asked (pull to refresh, or the Sync button) and once on app open if a family exists. No background work.
+Sync runs only when asked (pull to refresh, or the Sync button) and once each time the book becomes ready (app open or after unlock) if a family exists. No background work. A sync started from a screen runs in the app's own scope (`Sync.detached`), so closing the screen does not stop it halfway; if its caller is cancelled anyway, the engine's `running` flag is cleared.
+
+A file's bytes are fetched on first open (`SyncEngine.fetchFile`) with a visible "Getting the file…" state. A private loan's files stay in `sync.blobsUp` and are never uploaded; a tombstoned file is dropped from the queue and never asked for.
 
 ### Files
 
@@ -119,7 +121,9 @@ Follows Balance's `android/UI.md` kit, simplified, plus the apple-design rules (
 - **Loan:** what is owed, next due date and amount, payments (newest first, each with who logged it), documents, Edit, Close loan.
 - **Add / edit loan (sheet):** kind first as three big choices; then only that kind's fields. "Keep private" toggle, off by default.
 - **Log payment (sheet):** amount (pre-filled with the EMI or interest due), date (today), kind, then optional: note, paste bank message, add photo, add document.
-- **Family:** members, Invite (QR + share), Join (scan or paste), my name, language, app lock.
+- **Family:** `ui/family/`. With no family yet: a short explanation and two large choices, "Start sharing" (asks a family name, default "<my name>'s family") and "Join my family". In a family: the members ("You" on mine, "joined <date>"), Invite someone (a sheet with the QR, "Ask them to open Tally → Family → Join, and scan this", a Share button that sends the invite text through the system share sheet, and "Anyone with this code can join. Share it only with family."), Sync now with the last-synced time, and Leave family (asks; the records stay on this phone). Below, always: My name, Language (English, Telugu, Hindi), App lock (turn on, change, turn off, through `LockFlow`), Hide amounts, and the version.
+- **Join (`family/join`):** "Scan the code" (a full-screen CameraX scanner, `family/scan`, ZXing decoding on a background thread; the camera permission is asked there, with "Paste the code instead" if it is refused) or a Paste button and field (the whole shared message may be pasted: `Invite.find` picks the link out of it). A valid invite always goes through "Join <family name>?" (the name comes from the invite) before anything is saved. An invite link that opens the app (`pendingInvite`) is taken after unlock and the welcome name, with the same question; if the phone is already in a family it says so and does nothing.
+- **Home:** pull down runs one sync and speaks only if it failed (one plain sentence) or if there is no family yet (offering "Set up"). The quiet line under the figure reads "Shared with family · synced 5 min ago", "Syncing…", "Not shared yet" (tap: Family) or "Couldn't sync · tap to retry".
 
 ## Not in version 1
 

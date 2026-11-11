@@ -20,6 +20,10 @@ import androidx.navigation.compose.rememberNavController
 import com.tally.book.core.*
 import com.tally.book.data.Ledger
 import com.tally.book.ui.components.*
+import com.tally.book.sync.Sync
+import com.tally.book.ui.family.FamilyBusy
+import com.tally.book.ui.family.InviteIntake
+import com.tally.book.ui.family.familyGraph
 import com.tally.book.ui.loans.loansGraph
 import com.tally.book.ui.lock.LockScreen
 import com.tally.book.ui.theme.Motion
@@ -84,6 +88,8 @@ fun TallyRoot() {
 fun MainScaffold() {
     val nav = rememberNavController()
     DisposableEffect(nav) { AppNav.controller = nav; onDispose { if (AppNav.controller === nav) AppNav.controller = null } }
+    // the book is open (and not locked): share what changed while away. A no-op without a family.
+    LaunchedEffect(Unit) { Sync.syncInBackground() }
     val pending by AppNav.pending
     val entry by nav.currentBackStackEntryAsState()
     LaunchedEffect(pending, entry) {
@@ -107,8 +113,11 @@ fun MainScaffold() {
                 popExitTransition = { if (calm()) fadeOut(tween(160)) else slideOutHorizontally(push) { it } },
             ) {
                 loansGraph()
+                familyGraph()
             }
         }
+        InviteIntake()
+        FamilyBusy()
     }
 }
 

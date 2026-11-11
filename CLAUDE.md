@@ -27,6 +27,8 @@ It is a sibling of Balance (`~/Balance/android`), whose foundation it copies (co
   - The merge is pure (`SyncModel`, no Android, no network) and covered by `SyncModelTest`/`SyncEngineTest`; change it there first. Model write helpers must keep stamping `updatedAt`/`updatedBy` and marking `sync.dirty` (and `sync.blobsUp` for new file bytes); making a loan private or shared must mark it, its payments and its files dirty.
   - The relay is reached only through the `tally_*` RPC functions. Tables stay RLS-on with no policies and no grants to `anon`/`authenticated`; a schema change is a new migration, never an edit of an applied one. Never commit `supabase/.temp` or any env file.
   - The wire envelope `{ k, r }`, the blob format (version byte 1) and the AAD strings are a protocol between phones on different versions: change them only with a new version byte and a reader for the old one.
+- **The invite text** (`tally://join#...`) is shown only inside the Invite sheet and handed to the system share sheet. Never put it in a snack, a dialog, a log, a crash message or saved state (`rememberSaveable`); the join confirmation shows only the family name parsed from it. The camera scanner and the Join field pass it straight to `Invite.find`.
+- **UI words about sharing** are "family", "share", "join". Never "relay", "key" or "encrypt" on screen, apart from the one line "Only your family can read what you share."
 - **Design follows `android/UI.md`.** Never use Material tab or chip rows for navigation. One root screen, pushed sub-screens, forms in sheets with Cancel and Save pinned.
 
 ## Map
@@ -39,6 +41,8 @@ android/app/src/main/java/com/tally/book/
   data/        Ledger (load/lock/save), Crypto, Files (FileStore)
   sync/        family sync: SyncCrypto (HKDF, seal/open), Invite, Relay (+ HttpRelay), SyncModel (pure merge/push rules), SyncEngine, Sync (app wiring)
   ui/          App.kt (Routes, AppNav, shell, SubScreen), theme/, components/ (the kit + Qr + PullRefresh), lock/,
+               family/ (FamilyScreen + Join + familyGraph, QrScanner + QrDecoder (CameraX + ZXing), FamilyFlow (create/join/leave, "please wait"),
+               SyncWiring (pull to refresh + status line), SyncText (pure words for sync: ago, errors, status, default name)),
                loans/ (LoansScreen + Welcome + loansGraph, LoanDetail, LoanSheet, PaymentSheet, Attachments (photos, documents, FileStore glue),
                FormBits, Words, SyncHooks (syncHook, syncStatusLine))
 android/app/src/test/   unit tests
@@ -54,6 +58,7 @@ export ANDROID_HOME=~/android-sdk
 cd android
 flock /tmp/balance-gradle.lock ./gradlew --console=plain assembleDebug       # app/build/outputs/apk/debug/
 flock /tmp/balance-gradle.lock ./gradlew --console=plain testDebugUnitTest
+flock /tmp/balance-gradle.lock ./gradlew --console=plain lintRelease assembleRelease   # release must build: R8 with CameraX + ZXing
 TALLY_LIVE=1 flock /tmp/balance-gradle.lock ./gradlew --console=plain testDebugUnitTest --tests 'com.tally.book.SyncLiveTest'   # opt-in: against the deployed relay
 ```
 

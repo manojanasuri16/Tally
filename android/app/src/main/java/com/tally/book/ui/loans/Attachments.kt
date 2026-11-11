@@ -24,6 +24,7 @@ import com.tally.book.core.*
 import com.tally.book.data.FileStore
 import com.tally.book.data.Ledger
 import com.tally.book.model.*
+import com.tally.book.sync.Sync
 import com.tally.book.ui.components.Dialogs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -180,6 +181,8 @@ fun removeStored(ids: List<String>) {
     appScope.launch { ids.forEach { dropBytes(it) } }
 }
 
+private fun isBusyFetch(id: String) = FileFetch.isBusy(id)
+
 private suspend fun dropBytes(id: String) {
     FileStore.fileStates.remove(id)
     runCatching { FileStore.fileRecDel(id) }
@@ -215,9 +218,29 @@ fun restorePayment(payment: Obj, files: List<Obj>) {
 
 // ---------- opening a stored document ----------
 
+/** The ids of files whose bytes are being fetched from the family right now (the row shows "Getting the file…"). */
+object FileFetch {
+    val busy = mutableStateOf<Set<String>>(emptySet())
+    fun isBusy(id: String): Boolean = id in busy.value
+}
+
+/**
+ * Opens a stored file in the phone's viewer. When its bytes are not on this phone yet (someone else added it) and there is a
+ * family, they are fetched first with a visible "Getting the file…" state; if they are not there yet, say so plainly.
+ */
 suspend fun openStoredFile(ctx: Context, meta: Obj) {
     val id = meta.s("id")
-    val bytes = try { FileStore.readFileBytes(id) } catch (e: FileStore.Fail) {
+    suspend fun read(): ByteArray = FileStore.readFileBytes(id)
+    val bytes = try {
+        try { read() } catch (e: FileStore.Fail) {
+            if (e.code != "missing" || !Sync.hasFamily()) throw e
+            if (isBusyFetch(id)) return
+            FileFetch.busy.value = FileFetch.busy.value + id
+            val got = try { Sync.detached { Sync.engine.fetchFile(id) } } finally { FileFetch.busy.value = FileFetch.busy.value - id }
+            if (!got) { Dialogs.tell(t("doc.notYet", "This file is not here yet. Ask the family member who added it to open Tally, then try again.")); return }
+            read()
+        }
+    } catch (e: FileStore.Fail) {
         Dialogs.tell(attachError(if (e.code == "missing") "missing" else "unreadable", meta.s("name"), 0.0)); return
     } catch (e: Exception) { Dialogs.tell(attachError("unreadable", meta.s("name"), 0.0)); return }
     val uri = withContext(Dispatchers.IO) {
