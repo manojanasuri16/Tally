@@ -57,6 +57,7 @@ supabase/migrations/     the relay (tables + tally_* functions); deploy with `np
 export ANDROID_HOME=~/android-sdk
 cd android
 flock /tmp/balance-gradle.lock ./gradlew --console=plain assembleDebug       # app/build/outputs/apk/debug/
+scripts/release.sh X.Y.Z ["notes"]                                           # from the repo root: bump, build signed APK, tag vX.Y.Z, publish a GitHub Release (PRERELEASE=1 for a pre-release)
 flock /tmp/balance-gradle.lock ./gradlew --console=plain testDebugUnitTest
 flock /tmp/balance-gradle.lock ./gradlew --console=plain lintRelease assembleRelease   # release must build: R8 with CameraX + ZXing
 TALLY_LIVE=1 flock /tmp/balance-gradle.lock ./gradlew --console=plain testDebugUnitTest --tests 'com.tally.book.SyncLiveTest'   # opt-in: against the deployed relay
