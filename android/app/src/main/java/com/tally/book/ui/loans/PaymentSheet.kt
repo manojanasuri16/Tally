@@ -28,7 +28,9 @@ import com.tally.book.model.*
 import com.tally.book.ui.components.*
 import com.tally.book.ui.theme.Apple
 import com.tally.book.ui.theme.AppleShapes
+import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /*
@@ -59,6 +61,8 @@ fun PaymentSheet(loanId: String, existing: Obj?, sms: String? = null, onDismiss:
     var error by remember { mutableStateOf<String?>(null) }
     var errorStamp by remember { mutableIntStateOf(0) }
     val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    val ctx = LocalContext.current
     val pickers = rememberAttachPickers { p -> pending.add(p); showDetails = true }
 
     fun save() {
@@ -106,7 +110,10 @@ fun PaymentSheet(loanId: String, existing: Obj?, sms: String? = null, onDismiss:
                 InsetSurface {
                     shown.forEachIndexed { i, f ->
                         if (i > 0) Hairline(start = 16.dp)
-                        AttachedRow(f.s("name"), fileSizeLabel(f.num("size")), isImage = fileFamily(f) == "image", thumb = null, onRemove = { removed.add(f.s("id")) })
+                        // A saved file opens on a tap (fetching it first when a family member added it), so a receipt can be looked at again.
+                        val sub = if (FileFetch.isBusy(f.s("id"))) t("doc.getting", "Getting the file…") else fileSizeLabel(f.num("size"))
+                        AttachedRow(f.s("name"), sub, isImage = fileFamily(f) == "image", thumb = null, onRemove = { removed.add(f.s("id")) },
+                            onOpen = { scope.launch { openStoredFile(ctx, f) } })
                     }
                     pending.toList().forEachIndexed { i, p ->
                         if (i > 0 || shown.isNotEmpty()) Hairline(start = 16.dp)
@@ -124,9 +131,9 @@ fun PaymentSheet(loanId: String, existing: Obj?, sms: String? = null, onDismiss:
 
 /** A file waiting to be saved with the payment, or one it already has, with a button to take it off. */
 @Composable
-private fun AttachedRow(name: String, size: String, isImage: Boolean, thumb: ImageBitmap?, onRemove: () -> Unit) {
+private fun AttachedRow(name: String, size: String, isImage: Boolean, thumb: ImageBitmap?, onRemove: () -> Unit, onOpen: (() -> Unit)? = null) {
     val c = Apple.colors
-    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().then(if (onOpen != null) Modifier.pressDim(onClick = onOpen) else Modifier).heightIn(min = 56.dp).padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(44.dp).clip(AppleShapes.tile).background(c.fill), contentAlignment = Alignment.Center) {
             if (thumb != null) Image(thumb, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             else Icon(if (isImage) Icons.Rounded.Image else Icons.Rounded.Description, null, tint = c.secondaryLabel, modifier = Modifier.size(24.dp))
