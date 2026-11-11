@@ -37,7 +37,8 @@ DB = {
                note, sms, by, at, updatedAt, updatedBy, deleted? } ],
   files:   [ { id, ownerType, ownerId,          // ownerType: "loan" | "payment"
                name, mime, size, sha256, by, at, updatedAt, updatedBy, deleted? } ],
-  sync:    { cursor, lastAt, dirty: { "<recordId>": true }, blobsUp: { "<fileId>": true } }
+  sync:    { cursor, lastAt, dirty: { "<recordId>": true }, blobsUp: { "<fileId>": true },
+             pushed: { "<recordId>": true } }        // ids the relay is known to hold (sync/SyncModel.kt)
 }
 ```
 
@@ -55,11 +56,16 @@ DB = {
 - From it, by HKDF-SHA256:
   - `encKey` = HKDF(key, info "tally-enc"): AES-256-GCM for every record and file.
   - `authToken` = HKDF(key, info "tally-auth"), hex: proves membership to the relay. The relay stores only its SHA-256.
+  - HKDF has no salt (RFC 5869's all-zero default) and a 32-byte output; the relay stores `sha256(authToken)` as hex (`sync/SyncCrypto.kt`).
 - Record AAD: `"tally:<familyId>:<recordId>"`. File AAD: `"tally-file:<familyId>:<fileId>"`. A blob cannot be replayed under another id.
+- A sealed blob is base64 (standard, padded) of `version (1 byte, now 1) || iv (12 random bytes) || ciphertext || GCM tag (16)`. The version byte is also fed to GCM as additional data ahead of the AAD, so it cannot be changed undetected; a later format bumps it.
 
 ### Invite
 
-`tally://join#<familyId>.<base64url(key)>.<base64url(familyName)>`, shown as a QR code and shareable as text. The other phone scans it, or pastes it into "Join with a code". The fragment is never sent to any server. Whoever holds an invite can join, so it is shown only on demand, and every member appears in the members list.
+`tally://join#<familyId>.<base64url(key)>.<base64url(familyName)>` (base64url without padding), shown as a QR code and shareable as text. The other phone scans it, or pastes it into "Join with a code". The fragment is never sent to any server. Whoever holds an invite can join, so it is shown only on demand, and every member appears in the members list.
+
+- The family id is 16 random bytes, base64url (22 characters): it is the only thing between a stranger and the endpoint's rows besides the token, so it is never a `uid()`.
+- The name is 1 to 80 characters, no control characters. `Invite.parse` is strict and returns null for anything else (extra parts, padding, a key that is not 32 bytes, invalid UTF-8).
 
 ### The relay (Supabase)
 
@@ -69,6 +75,9 @@ Row level security is on for every table with no policies, so the anon key can r
 - `tally_push(family_id, token, rows jsonb)` → rows are `{ id, kind, blob }`; each upsert takes the next value of a per-database sequence as `seq`
 - `tally_pull(family_id, token, since bigint, max int)` → `{ id, kind, blob, seq }` ordered by `seq`
 - `tally_blob_put(family_id, token, id, data)` / `tally_blob_get(family_id, token, id)` for encrypted file bytes (base64 text)
+- `tally_ping()` returns 1 after reading one row; no token. A daily GitHub Action (`.github/workflows/keep-awake.yml`) calls it so the free project is never paused.
+
+Every tokened function hashes the token with SHA-256 and compares it to the family's `token_hash`; an unknown family and a wrong token give the same error (SQLSTATE 28000). `tally_family_create` is idempotent for the same hash and refuses a different hash for an existing id. Limits: ids `[A-Za-z0-9_-]{1,64}` (family ids exactly 22), kind one of the four, at most 500 rows per push and 500 per pull, a record blob at most 64 KiB, a file blob at most 6 MiB. Pushes to one family take a per-family advisory lock before taking seq values, so seqs become visible in order within a family and paging by `seq > cursor` never skips a row (the reasoning is in the migration). There is no delete function: a family's rows stay on the relay after everyone leaves.
 
 The relay sees: family id, record ids, record kind, sizes and timing. It never sees names, amounts, notes, messages or file contents.
 
@@ -83,7 +92,13 @@ The phone talks to PostgREST with `HttpURLConnection` (no SDK). The project URL 
 2. **Push** every dirty record that is not private. On success clear its dirty mark.
 3. **Files:** upload the bytes of each id in `sync.blobsUp`; download bytes for any file record that has none locally (lazily is fine: on first open).
 
-A record is one JSON object `{ kind: "loan"|"payment"|"file"|"member", ...fields }`. Merge is per record, last writer wins. Payments are separate records, so two people logging payments never collide.
+On the wire a record is the sealed envelope `{ "k": "loan"|"payment"|"file"|"member", "r": { ...the record... } }`. The wire kind sits outside the record because loans and payments have their own `kind` field. It must match the relay row's `kind` and `r.id` must match the row id, or the row is skipped. Fields that describe only this phone's copy (a file's `enc`) are not sent, and a pulled record keeps the local value. Merge is per record, last writer wins. Payments are separate records, so two people logging payments never collide.
+
+Refinements in `sync/`:
+- The cursor moves in the same save as the page it covers, so a sync that stops halfway resumes. A dirty mark is cleared after a successful push only if the record has not changed since it was collected (an edit during the push stays dirty).
+- A record that is private on this phone is never replaced by a pulled row. If someone else's edit of it arrives, it is ignored and the record is marked dirty again, so this phone's tombstone goes back up and wins.
+- Pushing a private record: if its id is in `sync.pushed` the push is a bare tombstone `{ id, deleted: true, updatedAt, updatedBy }`, otherwise nothing is sent. A payment or file whose owner cannot be found counts as private when pushing (fail closed).
+- Creating or joining marks every record dirty and every live file for upload, so a phone that already had loans shares them. Joining checks the invite with one pull before anything is saved. Leaving removes `family` and `sync` and keeps every record.
 
 Making a shared loan private pushes tombstones for the loan, its payments and its files, and keeps the local copies. Making a private loan shared marks them all dirty.
 

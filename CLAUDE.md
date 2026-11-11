@@ -21,6 +21,12 @@ It is a sibling of Balance (`~/Balance/android`), whose foundation it copies (co
 - **Dates are device-local, through `Clock`:** `Clock.today()`, `todayISO()`, `todayKey()`, `Clock.millis()`. Never call `LocalDate.now()` or `System.currentTimeMillis()`; tests pin the clock.
 - **Ask and tell through `Dialogs.ask(message, ok, danger)` / `Dialogs.tell` / `Dialogs.snack(text, "Undo") {}`.** Model code uses `UiHooks.ask/tell`. A destructive action asks, or offers Undo.
 - **Document files are kept byte-for-byte** (`data/Files.kt`, checked by SHA-256). Never re-encode or compress one (photos are scaled once, before they are stored).
+- **Sync** (`sync/`, `docs/DESIGN.md` "Sync"; the relay SQL is `supabase/migrations/*_tally_relay.sql`):
+  - Nothing reaches the relay unsealed: every record and file goes through `SyncCrypto` (AES-256-GCM, AAD bound to family and id). Never add a relay call that sends plaintext, and never send `family.key` or `authToken` anywhere but the invite and the token parameter.
+  - `SyncModel.collectPush` is the only place that decides what leaves the phone. A private loan, its payments and its files go up only as bare tombstones, and only when `sync.pushed` says the relay holds them. Keep `isPrivate` failing closed for pushing.
+  - The merge is pure (`SyncModel`, no Android, no network) and covered by `SyncModelTest`/`SyncEngineTest`; change it there first. Model write helpers must keep stamping `updatedAt`/`updatedBy` and marking `sync.dirty` (and `sync.blobsUp` for new file bytes); making a loan private or shared must mark it, its payments and its files dirty.
+  - The relay is reached only through the `tally_*` RPC functions. Tables stay RLS-on with no policies and no grants to `anon`/`authenticated`; a schema change is a new migration, never an edit of an applied one. Never commit `supabase/.temp` or any env file.
+  - The wire envelope `{ k, r }`, the blob format (version byte 1) and the AAD strings are a protocol between phones on different versions: change them only with a new version byte and a reader for the old one.
 - **Design follows `android/UI.md`.** Never use Material tab or chip rows for navigation. One root screen, pushed sub-screens, forms in sheets with Cancel and Save pinned.
 
 ## Map
@@ -31,9 +37,12 @@ android/app/src/main/java/com/tally/book/
   core/        Js helpers (n, inr, obj, arr...), JsonCodec, I18n, DevicePrefs, Clock + dates (Util)
   model/       Db (DB, onDbRead), Book (freshDb), State (reset), Hooks (UiHooks), FileMeta
   data/        Ledger (load/lock/save), Crypto, Files (FileStore)
+  sync/        family sync: SyncCrypto (HKDF, seal/open), Invite, Relay (+ HttpRelay), SyncModel (pure merge/push rules), SyncEngine, Sync (app wiring)
   ui/          App.kt (Routes, AppNav, shell, SubScreen), theme/, components/ (the kit + Qr), lock/, loans/ (LoansScreen, loansGraph)
 android/app/src/test/   unit tests
 docs/DESIGN.md
+supabase/migrations/     the relay (tables + tally_* functions); deploy with `npx supabase db push --remote` from the repo root
+.github/workflows/keep-awake.yml   daily tally_ping so the free Supabase project never pauses
 ```
 
 ## Commands
@@ -43,6 +52,7 @@ export ANDROID_HOME=~/android-sdk
 cd android
 flock /tmp/balance-gradle.lock ./gradlew --console=plain assembleDebug       # app/build/outputs/apk/debug/
 flock /tmp/balance-gradle.lock ./gradlew --console=plain testDebugUnitTest
+TALLY_LIVE=1 flock /tmp/balance-gradle.lock ./gradlew --console=plain testDebugUnitTest --tests 'com.tally.book.SyncLiveTest'   # opt-in: against the deployed relay
 ```
 
 - **RAM is tight (7 GB).** One Gradle at a time, always through that `flock` (shared with Balance). Stop it (`./gradlew --stop`) before booting an emulator.
