@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Tally" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+    <style name="Theme.Tally.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/icon_bg</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_glyph</item>
+        <item name="postSplashScreenTheme">@style/Theme.Tally</item>
+    </style>
+</resources>

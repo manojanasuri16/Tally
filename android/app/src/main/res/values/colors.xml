@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="icon_bg">#080E16</color>
+    <color name="icon_fg">#A8C8E8</color>
+    <!-- matches the web app's light page background so there is no flash between splash and first paint -->
+    <color name="window_bg">#F2F2F7</color>
+</resources>

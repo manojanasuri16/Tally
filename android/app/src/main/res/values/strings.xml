@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Tally</string>
+    <string name="share_log">Log a payment</string>
+    <string name="bio_title">Unlock Tally</string>
+    <string name="bio_setup_title">Turn on fingerprint unlock</string>
+    <string name="bio_subtitle">Confirm it\'s you</string>
+    <string name="bio_cancel">Use PIN</string>
+</resources>
