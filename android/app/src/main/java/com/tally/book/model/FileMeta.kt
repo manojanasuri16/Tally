@@ -55,7 +55,8 @@ val FILE_ACCEPT: String = FILE_TYPES.keys.joinToString(",") { ".$it" } + "," + F
 const val FILE_CAP_MB_DEFAULT = 25.0
 val FILE_CAP_CHOICES = listOf(5.0, 10.0, 25.0, 50.0)
 
-fun filesAll(): List<Obj> = if (DB["files"] is List<*>) DB.objs("files") else emptyList()
+/** Live file records: tombstones (deleted: true) are hidden, so filesOf/fileCount/fileById never show them. */
+fun filesAll(): List<Obj> = if (DB["files"] is List<*>) DB.objs("files").filter { !it.b("deleted") } else emptyList()
 fun filesOf(ownerType: String, ownerId: String): List<Obj> =
     filesAll().filter { it["ownerType"] == ownerType && it["ownerId"] == ownerId }.sortedWith { a, b -> val x = a.num("addedAt"); val y = b.num("addedAt"); if (x < y) -1 else if (x > y) 1 else 0 }
 fun fileCount(ownerType: String, ownerId: String): Double = filesOf(ownerType, ownerId).size.toDouble()

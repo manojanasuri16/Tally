@@ -29,7 +29,8 @@ DB = {
   family:  { id, key, name } | absent,          // key: base64 of 32 random bytes; absent until created or joined
   members: [ { id, name, at, updatedAt, updatedBy, deleted? } ],
   loans:   [ { id, kind, name, lender, principal, rate, startDate, tenureMonths, emi, dueDay,
-               interestEvery,                   // "month" | "year" (hand, gold)
+               interestEvery,                   // "month" | "year" (hand: default month; gold: default year)
+               rateUnit,                        // "year" (default: percent a year) | "month" (percent a month; "2 rupees interest" = 2) (hand, gold)
                grams, note, private, closed, closedDate,
                by, at, updatedAt, updatedBy, deleted? } ],
   payments:[ { id, loanId, date, amount, kind,  // kind: "emi" | "interest" | "principal"
