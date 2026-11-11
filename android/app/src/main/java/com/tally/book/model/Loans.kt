@@ -25,12 +25,28 @@ fun kindLabel(kind: String?): String = when (kind) {
     else -> t("loan.kind.other", "Loan")
 }
 
-fun payKindLabel(kind: String?): String = when (kind) {
-    "emi" -> t("pay.kind.emi", "EMI")
-    "interest" -> t("pay.kind.interest", "Interest")
-    "principal" -> t("pay.kind.principal", "Principal")
+/** [kindLabel] for a loan record: money I gave reads "To a person". */
+fun loanKindLabel(loan: Obj): String = if (isGiven(loan)) t("loan.kind.given", "To a person") else kindLabel(loan.s("kind"))
+
+/**
+ * What a payment was for, in the words of the loan it is on. [loanKind] "hand" says "Returned some of the amount" for a part repayment
+ * (a bank or gold loan keeps "Principal"); [given] turns the hand loan around ("Interest received", "Got some of the amount back").
+ */
+fun payKindLabel(kind: String?, loanKind: String? = null, given: Boolean = false): String = when {
+    kind == "emi" -> t("pay.kind.emi", "EMI")
+    kind == "interest" && given -> t("pay.kind.interest.given", "Interest received")
+    kind == "interest" -> t("pay.kind.interest", "Interest")
+    kind == "principal" && given -> t("pay.kind.principal.given", "Got some of the amount back")
+    kind == "principal" && loanKind == "hand" -> t("pay.kind.principal.hand", "Returned some of the amount")
+    kind == "principal" -> t("pay.kind.principal", "Principal")
     else -> t("pay.kind.other", "Payment")
 }
+
+/** Money I gave to someone: only a `hand` loan can be given (direction "given"); everything else is money I took. */
+fun isGiven(loan: Obj): Boolean = loan.s("kind") == "hand" && loan.s("direction") == "given"
+
+/** A person-to-person loan that charges nothing (rate 0): never due, never overdue, simply still owed. */
+fun isNoInterest(loan: Obj): Boolean = loan.s("kind") == "hand" && loan.num("rate") <= 0
 
 // ---- the arithmetic ----
 
@@ -81,6 +97,9 @@ fun loanView(loan: Obj, today: LocalDate = Clock.today()): Obj =
 /**
  * Everything a screen shows for one loan: owed, paidTotal, paidPrincipal, paidInterest, nextDueDate ("" when none),
  * nextDueAmount, overdue, dueThisMonth, paidThisPeriod, and for bank loans emi, monthsLeft, endDate ("" when none).
+ * For hand loans also: given, noInterest (rate 0: nextDueDate stays ""), repayBy ("" when none), repayDue (still owed and repayBy falls
+ * in this month or earlier: the remaining amount is a principal item in the due list) and repayOverdue (repayBy has passed and
+ * something is still owed). overdue/dueThisMonth/paidThisPeriod are about interest only.
  */
 fun loanView(loan: Obj, payments: List<Obj>, today: LocalDate): Obj {
     val kind = loan.s("kind")
@@ -140,7 +159,7 @@ fun loanView(loan: Obj, payments: List<Obj>, today: LocalDate): Obj {
             nextAmount = jsRound(min(emi, balance * (1 + r)))
             if (monthsLeft > 0) endDate = clampDay(addMonths(monthKey(next), monthsLeft - 1), dueDay).toString()
         }
-    } else if (open) {
+    } else if (open && !isNoInterest(loan)) {
         val step = if (every == "month") 1 else 12
         val base = lastInterest ?: start!!
         nextDue = clampDay(addMonths(monthKey(base), step), start!!.dayOfMonth).toString()
@@ -162,39 +181,76 @@ fun loanView(loan: Obj, payments: List<Obj>, today: LocalDate): Obj {
     )
     if (kind == "bank") { v["emi"] = emi; v["monthsLeft"] = monthsLeft; v["endDate"] = endDate }
     else v["interestEvery"] = every
+    if (kind == "hand") {
+        val by = parseISO(loan.s("repayBy"))
+        val owing = !closed && balance > 0 && by != null
+        v["given"] = isGiven(loan); v["noInterest"] = isNoInterest(loan)
+        v["repayBy"] = if (by != null) by.toString() else ""
+        v["repayDue"] = owing && monthKey(by!!) <= monthKey(today)
+        v["repayOverdue"] = owing && by!!.isBefore(today)
+    }
     return v
 }
 
 // ---- lists and totals ----
 
-/** Open loans with something due this calendar month or overdue, soonest first: { loan, date, amount, overdue }. */
+/**
+ * Open loans with something due this calendar month or overdue, soonest first:
+ * { loan, date, amount, overdue, given, kind }. A loan can give two rows: its interest (or EMI), kind "emi"/"interest", and, for a hand
+ * loan with a `repayBy` date in this month or earlier, the whole amount still owed, kind "principal", dated repayBy and overdue once
+ * that date has passed. A no-interest loan gives only the second. [given] marks money I gave (rows to receive, not to pay).
+ */
 fun dueList(today: LocalDate = Clock.today(), sharedOnly: Boolean = false): List<Obj> =
-    loans().filter { !it.b("closed") && !(sharedOnly && it.b("private")) }.mapNotNull { l ->
+    loans().filter { !it.b("closed") && !(sharedOnly && it.b("private")) }.flatMap { l ->
         val v = loanView(l, today)
+        val given = isGiven(l)
+        val rows = ArrayList<Obj>(2)
         if (v.num("owed") > 0 && v.s("nextDueDate").isNotEmpty() && (v.b("overdue") || v.b("dueThisMonth")))
-            obj("loan" to l, "date" to v.s("nextDueDate"), "amount" to v.num("nextDueAmount"), "overdue" to v.b("overdue"))
-        else null
+            rows.add(obj("loan" to l, "date" to v.s("nextDueDate"), "amount" to v.num("nextDueAmount"), "overdue" to v.b("overdue"),
+                "given" to given, "kind" to if (l.s("kind") == "bank") "emi" else "interest"))
+        if (v.b("repayDue"))
+            rows.add(obj("loan" to l, "date" to v.s("repayBy"), "amount" to v.num("owed"), "overdue" to v.b("repayOverdue"),
+                "given" to given, "kind" to "principal"))
+        rows
     }.sortedWith(compareBy<Obj> { it.s("date") }.thenBy { it.o("loan").s("name") })
 
 /**
- * { owed, dueThisMonth, paidThisMonth, byKind: { bank, hand, gold } (owed per kind), count (open loans) }.
- * [sharedOnly] leaves private loans out; the default counts everything on this phone.
+ * { owed, dueThisMonth, paidThisMonth, byKind: { bank, hand, gold }, count, toReceive, expectedThisMonth, receivedThisMonth, givenCount }.
+ * Money never nets out: owed, dueThisMonth, paidThisMonth and byKind are about money I took only; toReceive (what is still to come
+ * back on open loans I gave), expectedThisMonth and receivedThisMonth are the given side. count is every open loan, givenCount the
+ * given ones among them. [sharedOnly] leaves private loans out; the default counts everything on this phone.
  */
 fun totals(today: LocalDate = Clock.today(), sharedOnly: Boolean = false): Obj {
     val all = loans().filter { !(sharedOnly && it.b("private")) }
     val open = all.filter { !it.b("closed") }
     val by = obj("bank" to 0.0, "hand" to 0.0, "gold" to 0.0)
-    var owed = 0.0
-    open.forEach { val o = loanView(it, today).num("owed"); owed += o; by[it.s("kind")] = by.num(it.s("kind")) + o }
-    val due = dueList(today, sharedOnly).sumOf { it.num("amount") }
+    var owed = 0.0; var toReceive = 0.0; var givenCount = 0
+    open.forEach {
+        val o = loanView(it, today).num("owed")
+        if (isGiven(it)) { toReceive += o; givenCount++ } else { owed += o; by[it.s("kind")] = by.num(it.s("kind")) + o }
+    }
+    val rows = dueList(today, sharedOnly)
+    val due = rows.filter { !it.b("given") }.sumOf { it.num("amount") }
+    val expected = rows.filter { it.b("given") }.sumOf { it.num("amount") }
     val key = monthKey(today)
-    val ids = all.map { it.s("id") }.toSet()
-    val paid = DB.objs("payments").filter { !it.b("deleted") && it.s("loanId") in ids && it.s("date").startsWith(key) }.sumOf { it.num("amount") }
-    return obj("owed" to owed, "dueThisMonth" to due, "paidThisMonth" to paid, "byKind" to by, "count" to open.size.toDouble())
+    val givenIds = all.filter { isGiven(it) }.map { it.s("id") }.toSet()
+    val takenIds = all.map { it.s("id") }.toSet() - givenIds
+    val inMonth = DB.objs("payments").filter { !it.b("deleted") && it.s("date").startsWith(key) }
+    val paid = inMonth.filter { it.s("loanId") in takenIds }.sumOf { it.num("amount") }
+    val received = inMonth.filter { it.s("loanId") in givenIds }.sumOf { it.num("amount") }
+    return obj("owed" to owed, "dueThisMonth" to due, "paidThisMonth" to paid, "byKind" to by, "count" to open.size.toDouble(),
+        "toReceive" to toReceive, "expectedThisMonth" to expected, "receivedThisMonth" to received, "givenCount" to givenCount.toDouble())
 }
 
-/** What the Log payment form starts with: { kind, amount }. EMI for a bank loan, the period's interest for hand and gold. */
+/** True when a payment took what is owed from something to nothing: the moment to offer closing the loan (once). */
+fun reachedZero(owedBefore: Double, owedAfter: Double): Boolean = owedBefore > 0.005 && owedAfter < 0.005
+
+/**
+ * What the Log payment form starts with: { kind, amount }. EMI for a bank loan, the period's interest for hand and gold. A no-interest
+ * loan has nothing to suggest but a part repayment, with amount 0 (the person types what was returned).
+ */
 fun suggestPayment(loan: Obj, today: LocalDate = Clock.today()): Obj {
+    if (isNoInterest(loan)) return obj("kind" to "principal", "amount" to 0.0)
     val v = loanView(loan, today)
     return obj("kind" to if (loan.s("kind") == "bank") "emi" else "interest", "amount" to v.num("nextDueAmount"))
 }
@@ -217,6 +273,10 @@ fun validateLoan(draft: Obj): String? {
         val e = draft.s("interestEvery")
         if (e.isNotEmpty() && e != "month" && e != "year") return t("loan.err.every", "Please choose whether interest is paid every month or every year.")
     }
+    val dir = draft.s("direction")
+    if (dir.isNotEmpty() && dir != "taken" && dir != "given") return t("loan.err.direction", "Please choose whether you took or gave this money.")
+    if (dir == "given" && kind != "hand") return t("loan.err.direction", "Please choose whether you took or gave this money.")
+    if (draft.s("repayBy").isNotEmpty() && parseISO(draft.s("repayBy")) == null) return t("loan.err.repayBy", "Please enter a date for when it is to be returned.")
     return null
 }
 

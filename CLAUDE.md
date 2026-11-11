@@ -44,7 +44,7 @@ android/app/src/main/java/com/tally/book/
                family/ (FamilyScreen + Join + familyGraph, QrScanner + QrDecoder (CameraX + ZXing), FamilyFlow (create/join/leave, "please wait"),
                SyncWiring (pull to refresh + status line), SyncText (pure words for sync: ago, errors, status, default name)),
                loans/ (LoansScreen + Welcome + loansGraph, LoanDetail, LoanSheet, PaymentSheet, Attachments (photos, documents, FileStore glue),
-               FormBits, Words, SyncHooks (syncHook, syncStatusLine))
+               FormBits, Words (plain words, and `loanWords(given)`: the one place wording turns around for money I gave), SyncHooks (syncHook, syncStatusLine))
 android/app/src/test/   unit tests
 docs/DESIGN.md
 supabase/migrations/     the relay (tables + tally_* functions); deploy with `npx supabase db push --remote` from the repo root

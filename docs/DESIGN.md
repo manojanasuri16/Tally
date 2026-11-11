@@ -11,7 +11,7 @@ It is a sibling of Balance (`~/Balance/android`, package `com.balance.ledger`) a
 
 - Three kinds of loan:
   - `bank`: principal, yearly rate, tenure in months, monthly EMI, due day.
-  - `hand`: money borrowed from a person. Only interest is paid (monthly or yearly); the full principal stays due until a lump-sum repayment.
+  - `hand`: money borrowed from a person (or, with `direction: "given"`, money lent to one). Only interest is paid (monthly or yearly), or none at all; the principal stays owed until it is returned, all at once or in parts.
   - `gold`: a gold loan. Interest is paid once a year; principal is repaid on closure.
 - Log a payment against a loan: amount, date, what it was for (EMI, interest, principal), and optionally a note, a pasted bank SMS, and photos or documents.
 - Keep each loan's documents.
@@ -31,6 +31,8 @@ DB = {
   loans:   [ { id, kind, name, lender, principal, rate, startDate, tenureMonths, emi, dueDay,
                interestEvery,                   // "month" | "year" (hand: default month; gold: default year)
                rateUnit,                        // "year" (default: percent a year) | "month" (percent a month; "2 rupees interest" = 2) (hand, gold)
+               direction,                       // hand only: absent/"taken" (money I took) | "given" (money I gave); never changed after the loan is made
+               repayBy,                         // hand only, optional ISO date: "to be returned by"
                grams, note, private, closed, closedDate,
                by, at, updatedAt, updatedBy, deleted? } ],
   payments:[ { id, loanId, date, amount, kind,  // kind: "emi" | "interest" | "principal"
@@ -42,6 +44,8 @@ DB = {
 }
 ```
 
+- A `hand` loan with `rate: 0` has no interest: no next due, never overdue, simply still owed. `repayBy` puts the remaining amount in the due list as a principal row from the month it falls in (overdue once passed while anything is owed), separate from the interest row. Part repayments (`principal` payments) lower what interest is worked on.
+- Money never nets out. For taken loans `totals()` gives `owed`, `dueThisMonth`, `paidThisMonth`, `byKind`; for given loans `toReceive`, `expectedThisMonth`, `receivedThisMonth`. `dueList()` rows carry `given` and `kind` (`emi`/`interest`/`principal`). On screen a given loan reads "Still to come back", "Log money received", "Expected this month", "Received".
 - `by` / `updatedBy` are member ids; `at` / `updatedAt` are epoch milliseconds from `Clock.millis()`.
 - Dates are ISO `YYYY-MM-DD`, device-local.
 - Deleting sets `deleted: true` (a tombstone) so the delete can travel. Tombstones are hidden everywhere in the UI.

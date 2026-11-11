@@ -50,6 +50,20 @@ fun memberName(id: String?): String {
     return t("member.someone", "Someone")
 }
 
+/**
+ * Whether anyone but me could have added a record: the phone is in a family, or a loan on it was made by another person (a family
+ * that was left keeps its loans). When false "added by <name>" would always be me, so the home list leaves it out.
+ */
+fun bookHasOthers(): Boolean {
+    if (DB.o("family") != null) return true
+    val mine = myId()
+    return DB.objs("loans").any { !it.b("deleted") && it.s("by").isNotEmpty() && it.s("by") != mine }
+}
+
+/** The local calendar date of an epoch-millisecond stamp (`at`, `updatedAt`), as ISO. */
+fun isoOfMillis(ms: Double): String =
+    java.time.Instant.ofEpochMilli(ms.toLong()).atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString()
+
 // ---- stamping ----
 
 /** Marks a record as changed by me now, and for the sync layer. */
