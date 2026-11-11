@@ -9,6 +9,7 @@ import com.tally.book.model.DB
 import com.tally.book.model.fileById
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -31,6 +32,12 @@ object Sync {
         if (!hasFamily()) return
         scope.launch { engine.sync() }
     }
+
+    /**
+     * Runs [block] (a create, join, leave or sync on [engine]) in the app's own scope and waits for it, so a screen that is closed
+     * meanwhile (a pull let go, the back button) does not cancel it halfway.
+     */
+    suspend fun <T> detached(block: suspend () -> T): T = scope.async { block() }.await()
 
     fun hasFamily(db: Obj = DB): Boolean = db.o("family")?.s("id")?.isNotEmpty() == true
 

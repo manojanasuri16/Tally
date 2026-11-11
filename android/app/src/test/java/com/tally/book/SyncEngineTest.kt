@@ -2,6 +2,8 @@ package com.tally.book
 
 import com.tally.book.core.*
 import com.tally.book.sync.*
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
@@ -210,5 +212,62 @@ class SyncEngineTest {
         val fid = a.db.o("family").s("id")
         assertNotNull(relay.records[fid]!!["p5"])
         assertNotNull(relay.blobs[fid]!!["f1"])
+    }
+
+    @Test fun aPrivatePaymentsFileIsNeverUploadedAndStaysQueued() {
+        val a = Phone("A", relay)
+        a.loan("lp", "Secret", private = true)
+        a.payment("pp", "lp", 4242)
+        a.file("fpp", "payment", "pp", byteArrayOf(7, 7, 7))
+        family(a)
+        val fid = a.db.o("family").s("id")
+        repeat(3) { done(a.sync()) }
+        assertNull(relay.blobs[fid]!!["fpp"])
+        assertTrue(a.db.o("sync").o("blobsUp")!!.b("fpp"))             // kept, for if the loan is shared later
+        assertNull(relay.records[fid]!!["fpp"])
+        // shared later: the file goes up on the next sync and the queue empties
+        a.edit("loans", "lp") { it["private"] = false }
+        listOf("pp", "fpp").forEach { a.db.oo("sync").oo("dirty")[it] = true }
+        done(a.sync())
+        assertNotNull(relay.blobs[fid]!!["fpp"])
+        assertFalse(a.db.o("sync").o("blobsUp")!!.b("fpp"))
+    }
+
+    @Test fun aDeletedFileIsNotMissingBytesToDownload() {
+        val a = Phone("A", relay); val b = Phone("B", relay); val c = Phone("C", relay)
+        val invite = family(a)
+        done(runBlocking { b.engine.joinFamily(invite) })
+        // what the UI does when a document is deleted: tombstone the record, leave the queue, drop the bytes
+        a.put("files", obj("id" to "f1", "ownerType" to "payment", "ownerId" to "p1", "deleted" to true))
+        a.files.bytes.remove("f1")
+        a.db.oo("sync").oo("blobsUp").remove("f1")
+        done(a.sync())
+        val fid = a.db.o("family").s("id")
+        relay.blobs[fid]!!.remove("f1")
+        val before = relay.blobGets
+        // a phone that joins now gets the tombstone, asks for no bytes, and does not count it as a file it failed to get
+        val r = done(runBlocking { c.engine.joinFamily(invite) })
+        assertEquals(0, r.filesDown); assertEquals(0, r.skipped)
+        assertTrue(c.rec("files", "f1")!!.b("deleted"))
+        assertFalse(runBlocking { c.engine.fetchFile("f1") })
+        done(b.sync())
+        assertNull(b.files.bytes["f1"])
+        assertEquals(before, relay.blobGets)
+        assertTrue(a.db.o("sync").o("blobsUp")!!.isEmpty())
+    }
+
+    @Test fun cancellingASyncDoesNotLeaveItRunning() {
+        val gated = GateRelay(relay)
+        val a = Phone("A", gated)
+        family(a)
+        gated.gate = kotlinx.coroutines.CompletableDeferred()
+        runBlocking {
+            val job = launch(kotlinx.coroutines.Dispatchers.Unconfined) { a.engine.sync() }
+            assertTrue(a.engine.state.value.running)
+            job.cancelAndJoin()
+            assertFalse(a.engine.state.value.running)
+        }
+        gated.gate = null
+        done(a.sync())          // and the next one is not Busy
     }
 }

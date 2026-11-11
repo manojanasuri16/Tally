@@ -61,6 +61,19 @@ class Invite(val familyId: String, val key: ByteArray, val name: String) {
 
         fun make(invite: Invite): String = make(invite.familyId, invite.key, invite.name)
 
+        /**
+         * The invite inside [text], which may be a whole shared message ("Join our family in Tally: tally://join#...") or a
+         * link someone pasted with other words around it. The invite itself is still parsed strictly.
+         */
+        fun find(text: String?): Invite? {
+            val s = text ?: return null
+            val at = s.indexOf(PREFIX)
+            if (at < 0) return null
+            var end = at
+            while (end < s.length && !s[end].isWhitespace()) end++
+            return parse(s.substring(at, end))
+        }
+
         /** The invite in [text] (surrounding whitespace allowed, nothing else), or null. */
         fun parse(text: String?): Invite? {
             val s = text?.trim() ?: return null

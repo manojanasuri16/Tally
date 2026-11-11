@@ -57,4 +57,18 @@ class SyncInviteTest {
         assertThrows(IllegalArgumentException::class.java) { Invite.make(Invite.newFamilyId(), ByteArray(16), "x") }
         assertThrows(IllegalArgumentException::class.java) { Invite.make(Invite.newFamilyId(), key, " ") }
     }
+
+    @Test fun findPicksTheInviteOutOfAMessage() {
+        val text = Invite.make(Invite.newFamilyId(), key, "Our family")
+        val inv = Invite.parse(text)!!
+        assertEquals(inv, Invite.find("Join our family in Tally:\n$text"))
+        assertEquals(inv, Invite.find("$text"))
+        assertEquals(inv, Invite.find("hello  $text  thanks!"))
+        assertNull(Invite.find("Join our family in Tally"))
+        assertNull(Invite.find(null))
+        assertNull(Invite.find("tally://join#nope"))
+        assertNull(Invite.find("https://example.com/#" + text.removePrefix(Invite.PREFIX)))
+        // still strict about the invite itself
+        assertNull(Invite.find("look: " + text + "x."))
+    }
 }

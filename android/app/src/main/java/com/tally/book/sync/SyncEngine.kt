@@ -167,6 +167,10 @@ class SyncEngine(
             SyncResult.Failed(e.error)
         } catch (e: SyncBook.SaveFailed) {
             SyncResult.Failed(SyncError.Storage)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // the caller went away mid-sync: do not leave the UI showing "Syncing…" for ever
+            _state.value = _state.value.copy(running = false)
+            throw e
         } finally {
             lock.unlock()
         }

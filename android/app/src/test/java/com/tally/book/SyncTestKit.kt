@@ -52,9 +52,22 @@ class FakeRelay : Relay {
         return RelayResult.Ok(Unit)
     }
 
+    /** How many file downloads were asked for. */
+    var blobGets = 0
+
     override suspend fun blobGet(familyId: String, token: String, id: String): RelayResult<String?> {
+        blobGets++
         if (!ok(familyId, token)) return RelayResult.Err(SyncError.Unauthorised)
         return RelayResult.Ok(blobs[familyId]?.get(id))
+    }
+}
+
+/** A relay whose pull can be held up until the test lets it go (or cancels the sync waiting on it). */
+class GateRelay(private val inner: FakeRelay) : Relay by inner {
+    var gate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+    override suspend fun pull(familyId: String, token: String, since: Long, max: Int): RelayResult<List<RelayRow>> {
+        gate?.await()
+        return inner.pull(familyId, token, since, max)
     }
 }
 
