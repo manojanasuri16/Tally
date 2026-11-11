@@ -35,6 +35,7 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
     val editing = existing != null
     val today = remember { Clock.today() }
     var kind by remember { mutableStateOf(existing?.s("kind").orEmpty()) }
+    var given by remember { mutableStateOf(existing?.let { isGiven(it) } ?: false) }
     var name by remember { mutableStateOf(existing?.s("name").orEmpty()) }
     var lender by remember { mutableStateOf(existing?.s("lender").orEmpty()) }
     var principal by remember { mutableDoubleStateOf(existing?.num("principal") ?: 0.0) }
@@ -45,6 +46,9 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
     var tenure by remember { mutableStateOf(existing?.let { editText(it.num("tenureMonths")) }.orEmpty()) }
     var dueDay by remember { mutableStateOf(existing?.let { editText(it.num("dueDay")) } ?: today.dayOfMonth.toString()) }
     var dueDayTouched by remember { mutableStateOf(editing) }
+    var interest by remember { mutableStateOf(existing?.takeIf { it.s("kind") == "hand" }?.let { interestChoice(it.num("rate"), it.s("rateUnit")) } ?: "month") }
+    var repayBy by remember { mutableStateOf(existing?.s("repayBy").orEmpty()) }
+    var showDetails by remember { mutableStateOf(editing && (existing?.s("note").orEmpty().isNotBlank() || existing?.s("repayBy").orEmpty().isNotBlank())) }
     var every by remember { mutableStateOf(existing?.s("interestEvery")?.takeIf { it == "month" || it == "year" }) }
     var grams by remember { mutableStateOf(existing?.let { editText(it.num("grams")) }.orEmpty()) }
     var note by remember { mutableStateOf(existing?.s("note").orEmpty()) }
@@ -52,6 +56,7 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
     var error by remember { mutableStateOf<String?>(null) }
     var errorStamp by remember { mutableIntStateOf(0) }
 
+    val words = loanWords(given)
     val effEvery = every ?: if (kind == "gold") "year" else "month"
 
     fun build(): Obj {
@@ -61,7 +66,7 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
         d["lender"] = lender.trim()
         d["principal"] = principal
         d["startDate"] = startDate
-        d["rate"] = n(rate)
+        d["rate"] = if (kind == "hand" && interest == "none") 0.0 else n(rate)
         d["note"] = note.trim()
         d["private"] = keepPrivate
         if (kind == "bank") {
@@ -69,16 +74,21 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
             d["tenureMonths"] = n(tenure)
             d["dueDay"] = n(dueDay)
         } else {
-            d["rateUnit"] = rateUnit
+            d["rateUnit"] = if (kind == "hand") (if (interest == "month") "month" else "year") else rateUnit
             d["interestEvery"] = effEvery
             if (kind == "gold") d["grams"] = n(grams)
+        }
+        if (kind == "hand") {
+            if (repayBy.isNotEmpty()) d["repayBy"] = repayBy else d.remove("repayBy")
+            if (!editing) { if (given) d["direction"] = "given" else d.remove("direction") }
         }
         return d
     }
 
     fun save() {
         val draft = build()
-        val problem = validateLoan(draft)
+        val problem = if (kind == "hand" && interest != "none" && n(rate) <= 0)
+            t("loan.err.rateNeeded", "Please enter the interest rate, or choose No interest.") else validateLoan(draft)
         if (problem != null) { error = problem; errorStamp++; return }
         var id = ""
         Ledger.edit { id = saveLoan(draft).s("id") }
@@ -91,30 +101,41 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
     ) {
         if (!editing) {
             FieldTitle(t("loan.which", "What kind of loan is it?"))
-            LOAN_KINDS.forEach { k ->
-                KindChoice(kindIcon(k), kindLabel(k), kindHelp(k), selected = kind == k) { kind = k; error = null }
+            listOf("bank", "hand", "gold", "given").forEach { k ->
+                val isKind = if (k == "given") kind == "hand" && given else if (k == "hand") kind == "hand" && !given else kind == k
+                KindChoice(kindIcon(k), choiceTitle(k), choiceHelp(k), selected = isKind) {
+                    kind = if (k == "given") "hand" else k; given = k == "given"; error = null
+                }
             }
         }
         if (kind.isNotEmpty()) {
             TextInput(name, { name = it; error = null }, t("loan.name", "Name"), placeholder = t("loan.name.eg", "e.g. Home loan"))
             TextInput(
                 lender, { lender = it },
-                if (kind == "bank") t("loan.lender.bank", "Bank") else t("loan.lender.person", "Who lent the money?"),
-                placeholder = if (kind == "bank") t("loan.lender.bank.eg", "e.g. State Bank") else t("loan.lender.person.eg", "Their name"),
+                if (kind == "bank") t("loan.lender.bank", "Bank") else words.who,
+                placeholder = if (kind == "bank") t("loan.lender.bank.eg", "e.g. State Bank") else words.whoEg,
             )
-            MoneyField(principal, { principal = it; error = null }, t("loan.principal", "Amount borrowed"))
+            MoneyField(principal, { principal = it; error = null }, words.amount)
             DateField(startDate, {
                 startDate = it
                 if (kind == "bank" && !dueDayTouched) parseISO(it)?.let { d -> dueDay = d.dayOfMonth.toString() }
-            }, t("loan.startDate", "Date taken"))
+            }, words.date)
 
-            if (kind != "bank") {
+            if (kind == "hand") {
+                FieldTitle(t("loan.interest", "Interest"))
+                SegmentedControl(
+                    listOf("none" to t("loan.noInterest.choice", "No interest"), "month" to t("loan.perMonth", "Per month"), "year" to t("loan.perYear", "Per year")),
+                    interest, { interest = it; error = null },
+                )
+            } else if (kind != "bank") {
                 FieldTitle(t("loan.rateUnit", "Interest is quoted"))
                 SegmentedControl(listOf("year" to t("loan.perYear", "Per year"), "month" to t("loan.perMonth", "Per month")), rateUnit, { rateUnit = it })
             }
-            TextInput(
-                rate, { rate = decimalOnly(it) },
-                if (kind == "bank" || rateUnit == "year") t("loan.rate.year.label", "Interest rate (% a year)") else t("loan.rate.month.label", "Interest rate (% a month)"),
+            val perMonth = if (kind == "hand") interest == "month" else rateUnit == "month"
+            val hasInterest = kind != "hand" || interest != "none"
+            if (hasInterest) TextInput(
+                rate, { rate = decimalOnly(it); error = null },
+                if (kind == "bank" || !perMonth) t("loan.rate.year.label", "Interest rate (% a year)") else t("loan.rate.month.label", "Interest rate (% a month)"),
                 keyboard = KeyboardType.Decimal, placeholder = "0",
             )
             if (kind == "bank") {
@@ -122,11 +143,18 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
                 TextInput(tenure, { tenure = digitsOnly(it); error = null }, t("loan.tenure", "Number of months"), keyboard = KeyboardType.Number, placeholder = "12")
                 TextInput(dueDay, { dueDay = digitsOnly(it).take(2); dueDayTouched = true; error = null }, t("loan.dueDay", "Pay on this day of the month"), keyboard = KeyboardType.Number, placeholder = "5")
             } else {
-                FieldTitle(t("loan.every", "Interest is paid"))
-                SegmentedControl(listOf("month" to t("loan.everyMonth", "Every month"), "year" to t("loan.everyYear", "Every year")), effEvery, { every = it })
+                if (hasInterest) {
+                    FieldTitle(t("loan.every", "Interest is paid"))
+                    SegmentedControl(listOf("month" to t("loan.everyMonth", "Every month"), "year" to t("loan.everyYear", "Every year")), effEvery, { every = it })
+                }
                 if (kind == "gold") TextInput(grams, { grams = decimalOnly(it) }, t("loan.grams", "Gold pledged (grams)"), keyboard = KeyboardType.Decimal, placeholder = "0")
             }
-            TextInput(note, { note = it }, t("loan.note", "Note"), singleLine = false, supporting = t("common.optional", "Optional"))
+            if (!showDetails) {
+                PlainButton(t("pay.addDetails", "Add details"), { showDetails = true }, Modifier.align(Alignment.Start), bold = true)
+            } else {
+                if (kind == "hand") DateField(repayBy, { repayBy = it; error = null }, t("loan.repayBy.label", "To be returned by (optional)"), clearable = true)
+                TextInput(note, { note = it }, t("loan.note", "Note"), singleLine = false, supporting = t("common.optional", "Optional"))
+            }
             InsetSurface {
                 SwitchRow(
                     t("loan.keepPrivate", "Keep private"), keepPrivate, { keepPrivate = it },
@@ -139,10 +167,19 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
     }
 }
 
-private fun kindHelp(kind: String): String = when (kind) {
-    "bank" -> t("loan.kind.bank.help", "A home, car or personal loan with a monthly EMI")
-    "hand" -> t("loan.kind.hand.help", "Money borrowed from someone you know")
-    else -> t("loan.kind.gold.help", "A loan taken against gold")
+/** The four big choices of a new loan: [k] is "bank", "hand", "gold", or "given" (stored as a hand loan with direction given). */
+private fun choiceTitle(k: String): String = when (k) {
+    "bank" -> t("loan.kind.bank", "Bank loan")
+    "hand" -> t("loan.choice.hand", "Money I took from a person")
+    "gold" -> t("loan.kind.gold", "Gold loan")
+    else -> t("loan.choice.given", "Money I gave to someone")
+}
+
+private fun choiceHelp(k: String): String = when (k) {
+    "bank" -> t("loan.kind.bank.help", "A home, car, personal or DWCRA loan with a monthly EMI")
+    "hand" -> loanWords(false).kindHelp
+    "gold" -> t("loan.kind.gold.help", "A loan taken against gold")
+    else -> loanWords(true).kindHelp
 }
 
 @Composable

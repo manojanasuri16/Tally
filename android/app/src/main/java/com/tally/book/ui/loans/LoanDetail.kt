@@ -66,6 +66,8 @@ private fun LoanBody(id: String, d: Detail) {
     val closed = loan.b("closed")
     val kind = loan.s("kind")
     val neg = LocalSemantic.current.negative
+    val words = loanWords(loan)
+    val given = isGiven(loan)
 
     var logging by remember { mutableStateOf(false) }
     var editingLoan by remember { mutableStateOf(false) }
@@ -100,15 +102,16 @@ private fun LoanBody(id: String, d: Detail) {
             Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(ScreenPadding),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            val subtitle = listOf(kindLabel(kind), loan.s("lender")).filter { it.isNotBlank() }.joinToString(" · ")
+            val kindLine = listOf(loanKindLabel(loan), loan.s("lender")).filter { it.isNotBlank() }.joinToString(" · ")
+            val subtitle = kindLine + "\n" + addedByLine(loan.s("by"), loan.num("at"), loan.s("updatedBy"), ::memberName) { fmtISODate(isoOfMillis(it)) }
             if (closed) BigFigure(t("loan.closed", "Closed"), null, sub = subtitle, text = fmtISODate(loan.s("closedDate")).ifEmpty { "—" })
-            else BigFigure(t("loan.left", "Still to pay"), v.num("owed"), sub = subtitle)
+            else BigFigure(words.left, v.num("owed"), sub = subtitle)
 
             if (!closed) NextDue(loan, v)
-            if (!closed) PrimaryButton(t("pay.log", "Log payment"), { logging = true }, Modifier.fillMaxWidth())
+            if (!closed) PrimaryButton(words.log, { logging = true }, Modifier.fillMaxWidth())
 
             Facts(loan, v)
-            PaymentsGroup(d, onEdit = { editingPayment = it })
+            PaymentsGroup(d, given, onEdit = { editingPayment = it })
 
             AGroup(title = t("doc.title", "Documents")) {
                 d.docs.forEach { f ->
@@ -137,11 +140,6 @@ private fun LoanBody(id: String, d: Detail) {
                 else item { ButtonRow(t("loan.close", "Close this loan")) { closeIt() } }
                 item { ButtonRow(t("loan.delete", "Delete this loan"), neg) { deleteIt() } }
             }
-
-            Text(
-                t("loan.addedBy", "Added by {name}", "name" to memberName(loan.s("by"))), Modifier.fillMaxWidth().padding(top = 4.dp),
-                style = Apple.type.footnote, color = Apple.colors.secondaryLabel, textAlign = TextAlign.Center,
-            )
         }
     }
 
@@ -161,12 +159,16 @@ private fun NextDue(loan: Obj, v: Obj) {
         return
     }
     val date = v.s("nextDueDate")
+    val w = loanWords(loan)
+    val repayBy = v.s("repayBy")
     AGroup {
-        if (v.b("paidThisPeriod")) {
+        if (v.b("noInterest")) {
+            item { NoteRow(t("loan.noInterest", "No interest. Pay back when you can.")) }
+        } else if (v.b("paidThisPeriod")) {
             val monthly = loan.s("kind") == "bank" || v.s("interestEvery") == "month"
             item(Space60) {
                 ARow(
-                    if (monthly) t("loan.paid.month", "Paid for this month") else t("loan.paid.year", "Paid for this year"),
+                    if (monthly) w.paidMonth else w.paidYear,
                     sub = if (date.isNotEmpty()) t("loan.nextOn", "Next payment: {date}", "date" to dateInWords(date)) else null,
                     icon = Icons.Rounded.CheckCircle, tint = s.positive,
                 )
@@ -175,11 +177,18 @@ private fun NextDue(loan: Obj, v: Obj) {
             val words = dateInWords(date)
             item {
                 ARow(
-                    t("loan.next", "Next payment"), sub = if (v.b("overdue")) t("loan.overdue.on", "Overdue since {date}", "date" to words) else words,
+                    w.next, sub = if (v.b("overdue")) t("loan.overdue.on", "Overdue since {date}", "date" to words) else words,
                     subColor = if (v.b("overdue")) s.negative else androidx.compose.ui.graphics.Color.Unspecified, money = v.num("nextDueAmount"), moneyColor = Apple.colors.label,
                 )
             }
         } else item { NoteRow(t("loan.noNext", "No payment is due.")) }
+        if (repayBy.isNotEmpty()) item {
+            ARow(
+                t("loan.repayBy", "To be returned by {date}", "date" to fmtISODate(repayBy)),
+                sub = if (v.b("repayOverdue")) t("loan.repayBy.over", "This date has passed") else null, subColor = s.negative,
+                money = owed, moneyColor = Apple.colors.label,
+            )
+        }
     }
 }
 
@@ -187,18 +196,21 @@ private fun NextDue(loan: Obj, v: Obj) {
 private fun Facts(loan: Obj, v: Obj) {
     val kind = loan.s("kind")
     AGroup(title = t("loan.details", "Details")) {
-        item { ARow(t("loan.principal", "Amount borrowed"), money = loan.num("principal"), moneyColor = Apple.colors.label) }
+        item { ARow(loanWords(loan).amount, money = loan.num("principal"), moneyColor = Apple.colors.label) }
         if (kind == "bank") {
             item { ARow(t("loan.emi.short", "EMI"), money = v.num("emi"), moneyColor = Apple.colors.label) }
             item { ARow(t("loan.rate", "Interest rate"), value = rateInWords(loan.num("rate"), "year")) }
             item { ARow(t("loan.monthsLeft", "Months left"), value = fmtIN(v.num("monthsLeft"), 0)) }
             if (v.s("endDate").isNotEmpty()) item { ARow(t("loan.ends", "Last payment"), value = fmtISODate(v.s("endDate"))) }
         } else {
-            item { ARow(t("loan.rate", "Interest rate"), value = rateInWords(loan.num("rate"), loan.s("rateUnit"))) }
-            item { ARow(t("loan.interestPaid", "Interest is paid"), value = everyInWords(v.s("interestEvery").ifEmpty { interestEvery(loan) }).lowercase()) }
+            if (v.b("noInterest")) item { ARow(t("loan.interest", "Interest"), value = t("loan.noInterest.choice", "No interest")) }
+            else {
+                item { ARow(t("loan.rate", "Interest rate"), value = rateInWords(loan.num("rate"), loan.s("rateUnit"))) }
+                item { ARow(t("loan.interestPaid", "Interest is paid"), value = everyInWords(v.s("interestEvery").ifEmpty { interestEvery(loan) }).lowercase()) }
+            }
             if (kind == "gold" && loan.num("grams") > 0) item { ARow(t("loan.gold", "Gold"), value = t("loan.grams.value", "{g} grams", "g" to gram(loan.num("grams")))) }
         }
-        item { ARow(t("loan.taken", "Taken on"), value = fmtISODate(loan.s("startDate")).ifEmpty { "—" }) }
+        item { ARow(if (isGiven(loan)) t("loan.given", "Given on") else t("loan.taken", "Taken on"), value = fmtISODate(loan.s("startDate")).ifEmpty { "—" }) }
         if (loan.b("private")) item {
             ARow(t("loan.private", "Private"), sub = t("loan.keepPrivate.help", "Only on this phone. Not shared with family."), trailing = { PrivateMark() })
         }
@@ -207,14 +219,14 @@ private fun Facts(loan: Obj, v: Obj) {
 }
 
 @Composable
-private fun PaymentsGroup(d: Detail, onEdit: (Obj) -> Unit) {
+private fun PaymentsGroup(d: Detail, given: Boolean, onEdit: (Obj) -> Unit) {
     AGroup(title = t("pay.title", "Payments")) {
         if (d.payments.isEmpty()) item { NoteRow(t("pay.none", "No payments yet.")) }
         d.payments.forEach { p ->
             item {
                 SwipeRow(enabled = true, onDelete = { deletePaymentWithUndo(p) }) { _, _ ->
                     ARow(
-                        payKindLabel(p.s("kind")),
+                        payKindLabel(p.s("kind"), d.loan.s("kind"), given),
                         sub = t("pay.rowSub", "{date} · by {name}", "date" to fmtISODate(p.s("date")), "name" to memberName(p.s("by"))),
                         money = p.num("amount"), moneyColor = Apple.colors.label, onClick = { onEdit(p) },
                         trailing = if (p.s("id") in d.attached) ({ Icon(Icons.Rounded.AttachFile, t("pay.hasFiles", "Has attachments"), Modifier.size(18.dp), tint = Apple.colors.secondaryLabel) }) else null,

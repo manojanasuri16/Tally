@@ -8,6 +8,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountBalance
 import androidx.compose.material.icons.rounded.Diamond
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Redeem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -27,6 +28,7 @@ import com.tally.book.ui.theme.LocalSemantic
 fun kindIcon(kind: String): ImageVector = when (kind) {
     "bank" -> Icons.Rounded.AccountBalance
     "hand" -> Icons.Rounded.Person
+    "given" -> Icons.Rounded.Redeem
     else -> Icons.Rounded.Diamond
 }
 

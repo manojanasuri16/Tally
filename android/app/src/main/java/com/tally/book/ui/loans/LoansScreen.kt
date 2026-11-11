@@ -96,23 +96,32 @@ fun WelcomeScreen() {
 
 // ---------- home ----------
 
-private class Home(val totals: Obj, val due: List<Obj>, val groups: List<Pair<String, List<Obj>>>, val closed: List<Obj>, val any: Boolean, val owed: Map<String, Double>)
+private class Home(
+    val totals: Obj, val due: List<Obj>, val expected: List<Obj>, val groups: List<Pair<String, List<Obj>>>, val given: List<Obj>,
+    val closed: List<Obj>, val any: Boolean, val owed: Map<String, Double>, val hasTaken: Boolean, val showAdder: Boolean,
+)
+
+/** A pending Pay / Received tap: the loan and what the row was for ("principal" starts the form as a part repayment). */
+private class PayFor(val loanId: String, val kind: String?)
 
 private fun readHome(): Home {
     val all = loans()
     val open = all.filter { !it.b("closed") }
-    val kinds = LOAN_KINDS + open.map { it.s("kind") }.filter { it !in LOAN_KINDS }.distinct()
-    val groups = kinds.map { k -> k to open.filter { it.s("kind") == k }.sortedBy { it.s("name").lowercase() } }.filter { it.second.isNotEmpty() }
+    val taken = open.filter { !isGiven(it) }
+    val kinds = LOAN_KINDS + taken.map { it.s("kind") }.filter { it !in LOAN_KINDS }.distinct()
+    val groups = kinds.map { k -> k to taken.filter { it.s("kind") == k }.sortedBy { it.s("name").lowercase() } }.filter { it.second.isNotEmpty() }
+    val given = open.filter { isGiven(it) }.sortedBy { it.s("name").lowercase() }
     val closed = all.filter { it.b("closed") }.sortedByDescending { it.s("closedDate") }
     val owed = all.associate { it.s("id") to loanView(it).num("owed") }
-    return Home(totals(), dueList(), groups, closed, all.isNotEmpty(), owed)
+    val rows = dueList()
+    return Home(totals(), rows.filter { !it.b("given") }, rows.filter { it.b("given") }, groups, given, closed, all.isNotEmpty(), owed, taken.isNotEmpty(), bookHasOthers())
 }
 
 @Composable
 fun LoansScreen() {
     val rev = rememberLedger()
     val home = remember(rev) { readHome() }
-    var payFor by remember { mutableStateOf<String?>(null) }
+    var payFor by remember { mutableStateOf<PayFor?>(null) }
     var adding by remember { mutableStateOf(false) }
     var closedOpen by rememberSaveable { mutableStateOf(false) }
 
@@ -138,8 +147,10 @@ fun LoansScreen() {
                         EmptyState(t("home.empty", "No loans yet. Add one to start keeping track."), icon = Icons.Rounded.Group)
                     } else {
                         HomeHero(home)
-                        DueSection(home.due, onPay = { payFor = it }, onOpen = { openLoan(it) })
-                        home.groups.forEach { (kind, list) -> LoanGroup(kindLabel(kind), list, home.owed) }
+                        if (home.hasTaken) DueSection(home.due, onPay = { id, k -> payFor = PayFor(id, k) }, onOpen = { openLoan(it) })
+                        if (home.given.isNotEmpty()) DueSection(home.expected, onPay = { id, k -> payFor = PayFor(id, k) }, onOpen = { openLoan(it) }, given = true)
+                        home.groups.forEach { (kind, list) -> LoanGroup(kindLabel(kind), list, home.owed, home.showAdder) }
+                        if (home.given.isNotEmpty()) LoanGroup(t("home.gave", "Money I gave"), home.given, home.owed, home.showAdder)
                         if (home.closed.isNotEmpty()) ClosedGroup(home.closed, closedOpen) { closedOpen = !closedOpen }
                     }
                     PrimaryButton(t("home.addLoan", "Add a loan"), { adding = true }, Modifier.fillMaxWidth().padding(top = 4.dp))
@@ -148,57 +159,75 @@ fun LoansScreen() {
         }
     }
 
-    payFor?.let { PaymentSheet(it, null, onDismiss = { payFor = null }) }
+    payFor?.let { PaymentSheet(it.loanId, null, startKind = it.kind, onDismiss = { payFor = null }) }
     if (adding) LoanSheet(null, onDismiss = { adding = false }, onSaved = { adding = false })
     ShareIntake()
 }
 
 @Composable
 private fun HomeHero(home: Home) {
-    val paid = home.totals.num("paidThisMonth")
-    Hero(
-        t("home.stillToPay", "Still to pay"), home.totals.num("owed"),
-        sub = t("home.paidThisMonth", "Paid this month: {amt}", "amt" to amtText(paid)),
-    )
+    val toReceive = home.totals.num("toReceive")
+    val hasGiven = home.given.isNotEmpty()
+    if (home.hasTaken || !hasGiven) {
+        Hero(
+            t("home.stillToPay", "Still to pay"), home.totals.num("owed"),
+            sub = t("home.paidThisMonth", "Paid this month: {amt}", "amt" to amtText(home.totals.num("paidThisMonth"))),
+        )
+        if (hasGiven) AGroup { item { ARow(loanWords(true).toReturn, money = toReceive, moneyColor = Apple.colors.label) } }
+    } else {
+        /* only money I gave: the lead figure is what is to come back, not a "still to pay" of nothing */
+        Hero(
+            loanWords(true).left, toReceive,
+            sub = t("home.receivedThisMonth", "Received this month: {amt}", "amt" to amtText(home.totals.num("receivedThisMonth"))),
+        )
+    }
     val line = syncStatusLine
     if (line != null) Box(Modifier.padding(start = 4.dp)) { line() }
 }
 
 @Composable
-private fun DueSection(due: List<Obj>, onPay: (String) -> Unit, onOpen: (String) -> Unit) {
-    AGroup(title = t("home.due", "Due this month")) {
-        if (due.isEmpty()) item { NoteRow(t("home.nothingDue", "Nothing due this month")) }
+private fun DueSection(due: List<Obj>, onPay: (String, String?) -> Unit, onOpen: (String) -> Unit, given: Boolean = false) {
+    val w = loanWords(given)
+    AGroup(title = w.expected) {
+        if (due.isEmpty()) item { NoteRow(if (given) t("home.nothingExpected", "Nothing expected this month") else t("home.nothingDue", "Nothing due this month")) }
         else due.forEach { d ->
             val loan = d.o("loan")!!
-            item { DueRow(loan, d.s("date"), d.num("amount"), d.b("overdue"), onPay = { onPay(loan.s("id")) }, onOpen = { onOpen(loan.s("id")) }) }
+            val principal = d.s("kind") == "principal"
+            item {
+                DueRow(
+                    loan, d.s("date"), d.num("amount"), d.b("overdue"), if (principal) w.toReturn else null, given,
+                    onPay = { onPay(loan.s("id"), if (principal) "principal" else null) }, onOpen = { onOpen(loan.s("id")) },
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun DueRow(loan: Obj, date: String, amount: Double, overdue: Boolean, onPay: () -> Unit, onOpen: () -> Unit) {
+private fun DueRow(loan: Obj, date: String, amount: Double, overdue: Boolean, tag: String?, given: Boolean, onPay: () -> Unit, onOpen: () -> Unit) {
     val s = LocalSemantic.current
     Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(start = 16.dp, end = 12.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).pressable(onClick = onOpen).padding(vertical = 4.dp)) {
             Text(loan.s("name"), style = Apple.type.body.copy(fontWeight = FontWeight.SemiBold), color = Apple.colors.label, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (overdue) { Pill(t("home.overdue", "Overdue"), s.negative); Spacer(Modifier.width(8.dp)) }
-                Text(dateInWords(date), style = Apple.type.subheadline, color = if (overdue) s.negative else Apple.colors.secondaryLabel, maxLines = 1)
+                val when_ = dateInWords(date)
+                Text(if (tag != null) "$tag · $when_" else when_, style = Apple.type.subheadline, color = if (overdue) s.negative else Apple.colors.secondaryLabel, maxLines = 1)
             }
             Money(amount, style = Apple.type.title3, color = Apple.colors.label)
         }
         Spacer(Modifier.width(12.dp))
-        SecondaryButton(t("home.pay", "Pay"), onPay, Modifier.heightIn(min = 48.dp).widthIn(min = 72.dp))
+        SecondaryButton(if (given) t("home.received", "Received") else t("home.pay", "Pay"), onPay, Modifier.heightIn(min = 48.dp).widthIn(min = 72.dp))
     }
 }
 
 @Composable
-private fun LoanGroup(title: String, list: List<Obj>, owed: Map<String, Double>) {
+private fun LoanGroup(title: String, list: List<Obj>, owed: Map<String, Double>, showAdder: Boolean) {
     AGroup(title = title) {
         list.forEach { l ->
             item {
                 ARow(
-                    l.s("name"), sub = l.s("lender").ifBlank { null }, money = owed[l.s("id")] ?: 0.0, moneyColor = Apple.colors.label,
+                    l.s("name"), sub = loanRowSub(l.s("lender"), if (showAdder) memberName(l.s("by")) else null), money = owed[l.s("id")] ?: 0.0, moneyColor = Apple.colors.label,
                     chevron = true, onClick = { openLoan(l.s("id")) },
                     trailing = if (l.b("private")) ({ PrivateMark() }) else null,
                 )
@@ -235,7 +264,7 @@ private fun ClosedGroup(list: List<Obj>, open: Boolean, toggle: () -> Unit) {
                 list.forEach { l ->
                     item {
                         ARow(
-                            l.s("name"), sub = listOf(kindLabel(l.s("kind")), l.s("lender")).filter { it.isNotBlank() }.joinToString(" · "),
+                            l.s("name"), sub = listOf(loanKindLabel(l), l.s("lender")).filter { it.isNotBlank() }.joinToString(" · "),
                             value = fmtISODate(l.s("closedDate")).ifEmpty { null }, chevron = true, onClick = { openLoan(l.s("id")) },
                             trailing = if (l.b("private")) ({ PrivateMark() }) else null,
                         )
@@ -279,7 +308,7 @@ fun ShareIntake() {
             InsetSurface {
                 choices.forEachIndexed { i, l ->
                     if (i > 0) Hairline(start = 16.dp)
-                    ARow(l.s("name"), sub = listOf(kindLabel(l.s("kind")), l.s("lender")).filter { it.isNotBlank() }.joinToString(" · "), chevron = true, onClick = { loanId = l.s("id") })
+                    ARow(l.s("name"), sub = listOf(loanKindLabel(l), l.s("lender")).filter { it.isNotBlank() }.joinToString(" · "), chevron = true, onClick = { loanId = l.s("id") })
                 }
             }
         }

@@ -41,11 +41,16 @@ import kotlinx.coroutines.withContext
  */
 
 @Composable
-fun PaymentSheet(loanId: String, existing: Obj?, sms: String? = null, onDismiss: () -> Unit) {
+fun PaymentSheet(loanId: String, existing: Obj?, sms: String? = null, startKind: String? = null, onDismiss: () -> Unit) {
     val theLoan = remember(loanId) { loan(loanId) }
     if (theLoan == null) { LaunchedEffect(Unit) { onDismiss() }; return }
     val editing = existing != null
-    val suggestion = remember(loanId) { suggestPayment(theLoan) }
+    val words = loanWords(theLoan)
+    val given = isGiven(theLoan)
+    /* a due row for the amount still owed starts the form as a part repayment of all of it */
+    val suggestion = remember(loanId, startKind) {
+        if (startKind == "principal") obj("kind" to "principal", "amount" to loanView(theLoan).num("owed")) else suggestPayment(theLoan)
+    }
     val options = remember(loanId) { payKindOptions(theLoan.s("kind"), existing?.s("kind")) }
     val saved = remember { existing?.let { filesOf("payment", it.s("id")) } ?: emptyList() }
 
@@ -72,21 +77,24 @@ fun PaymentSheet(loanId: String, existing: Obj?, sms: String? = null, onDismiss:
         val problem = validatePayment(draft)
         if (problem != null) { error = problem; errorStamp++; return }
         var id = ""
+        val before = loanView(theLoan).num("owed")
         Ledger.edit { id = savePayment(draft).s("id") }
         removeStored(removed.toList())
         storeAll("payment", id, pending.toList())
+        val after = loan(loanId)?.let { loanView(it).num("owed") } ?: before
         onDismiss()
+        if (!theLoan.b("closed") && reachedZero(before, after)) offerClose(loanId, words.closeAsk)
     }
 
     EditSheet(
-        if (editing) t("pay.edit", "Edit payment") else t("pay.log", "Log payment"), onDismiss = onDismiss,
+        if (editing) t("pay.edit", "Edit payment") else words.log, onDismiss = onDismiss,
         onSave = { save() }, saveLabel = t("dlg.save", "Save"),
     ) {
         Text(theLoan.s("name"), Modifier.padding(start = 4.dp), style = Apple.type.subheadline, color = Apple.colors.secondaryLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        MoneyField(amount, { amount = it; amountTouched = true; error = null }, t("pay.amount", "Amount paid"))
+        MoneyField(amount, { amount = it; amountTouched = true; error = null }, if (given) t("pay.amount.given", "Amount received") else t("pay.amount", "Amount paid"))
         DateField(date, { date = it; error = null }, t("pay.date", "Date"))
         Text(t("pay.for", "What is it for?"), Modifier.padding(start = 14.dp), style = Apple.type.footnote, color = Apple.colors.secondaryLabel)
-        ChoiceChips(options.map { it to payKindLabel(it) }, kind, { k ->
+        ChoiceChips(options.map { it to payKindLabel(it, theLoan.s("kind"), given) }, kind, { k ->
             kind = k; error = null
             if (!amountTouched) amount = if (k == suggestion.s("kind")) suggestion.num("amount") else 0.0
         })
@@ -126,6 +134,17 @@ fun PaymentSheet(loanId: String, existing: Obj?, sms: String? = null, onDismiss:
             InsetSurface { AttachButtons(pickers) }
         }
         FormError(error, errorStamp)
+    }
+}
+
+/** Outlives the sheet, which is gone by the time the question is asked. */
+private val askScope = kotlinx.coroutines.MainScope()
+
+/** Everything owed has been paid: offers once to close the loan. */
+private fun offerClose(loanId: String, message: String) {
+    askScope.launch {
+        if (Dialogs.ask(message, t("loan.close", "Close this loan")))
+            Ledger.edit { closeLoan(loanId, todayISO()) }
     }
 }
 
