@@ -42,20 +42,28 @@ object FamilyFlow {
     /** What the full-screen "please wait" says, or null. */
     val busy = mutableStateOf<String?>(null)
 
-    /** Asks "Join <name>?" (the name comes from the invite, before anything is saved), then joins. True when this phone is now in the family. */
+    /**
+     * Asks "<Inviter> is inviting you to <Family>. Join?" (or "Join <Family>?" for an invite that does not say who sent it; both names
+     * come from the invite, before anything is saved), then joins. True when this phone is now in the family.
+     */
     suspend fun join(invite: Invite): Boolean {
         if (Sync.hasFamily()) {
             Dialogs.tell(t("join.already", "This phone is already in a family. Leave it first if you want to join another."))
             return false
         }
-        val ok = Dialogs.ask(
-            t("join.ask", "Join {name}?\n\nYou will see this family's loans and payments, and they will see the ones you share.", "name" to invite.name),
-            t("join.ok", "Join"),
-        )
+        val ok = Dialogs.ask(joinQuestion(invite), t("join.ok", "Join"))
         if (!ok) return false
         busy.value = t("join.busy", "Joining…")
         val result = try { Sync.detached { Sync.engine.joinFamily(invite) } } finally { busy.value = null }
         return finish(result, joining = true)
+    }
+
+    /** The join question: who invites (when the invite says) and the family's name, then what joining means. */
+    fun joinQuestion(invite: Invite): String {
+        val body = t("join.body", "You will see this family's loans and payments, and they will see the ones you share.")
+        val head = invite.inviter?.let { t("join.askFrom", "{inviter} is inviting you to {name}. Join?", "inviter" to it, "name" to invite.name) }
+            ?: t("join.askName", "Join {name}?", "name" to invite.name)
+        return head + "\n\n" + body
     }
 
     /** Makes the family and shares this phone's loans. True when this phone is now in a family. */

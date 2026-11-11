@@ -73,18 +73,6 @@ class SyncTextTest {
         assertEquals("Not shared yet", SyncText.status(SyncState(running = true), false, 0, now).text)
     }
 
-    @Test fun defaultFamilyName() {
-        assertEquals("Ravi's family", SyncText.defaultFamilyName("Ravi"))
-        assertEquals("Ravi Kumar's family", SyncText.defaultFamilyName("  Ravi Kumar \n"))
-        assertEquals("My family", SyncText.defaultFamilyName(""))
-        assertEquals("My family", SyncText.defaultFamilyName("   "))
-        val long = SyncText.defaultFamilyName("x".repeat(300))
-        assertTrue(long.length <= 80)
-        assertNotNull(com.tally.book.sync.Invite.cleanName(long))
-        assertEquals("రవి's family", SyncText.defaultFamilyName("రవి"))      // English wording here; Telugu in te.json
-        assertNotNull(com.tally.book.sync.Invite.cleanName(SyncText.defaultFamilyName("a\u0007b")))
-    }
-
     @Test fun joinedDateIsDeviceLocal() {
         val ms = 1_794_355_200_000L     // 2026-11-11T00:00:00Z
         assertEquals("2026-11-11", SyncText.isoDate(ms, ZoneId.of("UTC")))

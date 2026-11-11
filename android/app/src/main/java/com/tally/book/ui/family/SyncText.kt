@@ -2,13 +2,12 @@ package com.tally.book.ui.family
 
 import com.tally.book.core.t
 import com.tally.book.core.tp
-import com.tally.book.sync.Invite
 import com.tally.book.sync.SyncError
 import com.tally.book.sync.SyncResult
 import com.tally.book.sync.SyncState
 
 /*
- * The plain words for sync: how long ago, what a failed sync means, the quiet status line, the default family name.
+ * The plain words for sync: how long ago, what a failed sync means, the quiet status line.
  * Pure (no Compose, no network) so they can be unit-tested. No technical words reach the screen: never "relay", "key" or "encrypt".
  */
 object SyncText {
@@ -64,11 +63,4 @@ object SyncText {
     /** The device-local date (ISO, yyyy-mm-dd) of an epoch-millisecond time, for "joined 12-Nov-2026". */
     fun isoDate(ms: Long, zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): String =
         java.time.Instant.ofEpochMilli(ms).atZone(zone).toLocalDate().toString()
-
-    /** "<name>'s family", or "My family" when the name is blank. Always a valid family name (at most 80 characters, no control characters). */
-    fun defaultFamilyName(myName: String): String {
-        val clean = myName.filterNot { it.isISOControl() }.trim().take(60).trim()
-        val name = if (clean.isEmpty()) t("family.defaultMine", "My family") else t("family.defaultName", "{name}'s family", "name" to clean)
-        return Invite.cleanName(name) ?: "Family"
-    }
 }

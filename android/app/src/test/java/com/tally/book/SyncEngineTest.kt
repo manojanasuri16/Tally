@@ -36,6 +36,7 @@ class SyncEngineTest {
     @Test fun createAndJoinConverge() {
         val a = Phone("A", relay); val b = Phone("B", relay)
         val invite = family(a)
+        assertEquals("A", Invite.parse(invite)!!.inviter)       // the invite says who invites
         assertTrue(a.db.o("sync").o("dirty")!!.isEmpty())
         assertEquals(1, a.db.objs("members").size)
 
@@ -47,6 +48,7 @@ class SyncEngineTest {
         done(a.sync())
         assertEquals(a.shared(), b.shared())
         assertEquals(a.db.o("family"), b.db.o("family"))
+        assertEquals("Home", b.db.o("family").s("name"))       // the family's name, not the inviter's
 
         // the relay holds nothing readable
         for ((_, row) in relay.records[a.db.o("family").s("id")]!!) {

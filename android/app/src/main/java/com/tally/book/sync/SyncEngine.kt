@@ -86,8 +86,10 @@ class SyncEngine(
         return Family(id, key, f.s("name"))
     }
 
-    /** The invite for this phone's family (show only on demand), or null when there is no family. */
-    fun inviteText(db: Obj): String? = familyOf(db)?.let { runCatching { Invite.make(it.id, it.key, it.name.ifEmpty { "Family" }) }.getOrNull() }
+    /** The invite for this phone's family, saying who invites (DB.me.name), or null when there is no family. Show it only on demand. */
+    fun inviteText(db: Obj): String? = familyOf(db)?.let {
+        runCatching { Invite.make(it.id, it.key, it.name.ifEmpty { "Family" }, db.o("me")?.s("name")) }.getOrNull()
+    }
 
     // ---------- create / join / leave ----------
 

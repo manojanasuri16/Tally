@@ -101,14 +101,19 @@ private fun NoFamily(onStart: () -> Unit) {
 @Composable
 private fun StartSheet(onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
-    var name by remember { mutableStateOf(SyncText.defaultFamilyName(FamilyFlow.myName())) }
+    // no default: whoever starts the family types its one name, and everyone who joins sees that same name
+    var name by remember { mutableStateOf("") }
     val clean = Invite.cleanName(name)
     EditSheet(
-        t("family.name.title", "Your family's name"), onDismiss,
+        t("family.name.ask", "Give your family a name"), onDismiss,
         onSave = { onDismiss(); scope.launch { FamilyFlow.create(clean ?: return@launch) } },
         saveLabel = t("family.name.ok", "Start"), saveEnabled = clean != null,
     ) {
-        TextInput(name, { name = it }, t("family.name.label", "Family name"), supporting = t("family.name.help", "Your family will see this name when they join."))
+        TextInput(
+            name, { name = it }, t("family.name.label", "Family name"),
+            placeholder = t("family.name.placeholder", "e.g. Example family"),
+            supporting = t("family.name.help", "Your family will see this name when they join."),
+        )
     }
 }
 
@@ -216,7 +221,14 @@ fun JoinScreen() {
             if (invite == null) {
                 PrimaryButton(t("join.scan", "Scan the code"), { AppNav.go(ROUTE_SCAN) }, Modifier.fillMaxWidth().heightIn(min = 56.dp))
             } else {
-                AGroup { item { ARow(invite.name, sub = t("join.found", "A family is waiting for you"), icon = Icons.Rounded.Group) } }
+                AGroup {
+                    item {
+                        ARow(
+                            invite.name, icon = Icons.Rounded.Group,
+                            sub = invite.inviter?.let { t("join.invitedBy", "{inviter} is inviting you", "inviter" to it) } ?: t("join.found", "A family is waiting for you"),
+                        )
+                    }
+                }
                 PrimaryButton(t("join.ok", "Join"), { scope.launch { FamilyFlow.join(invite) } }, Modifier.fillMaxWidth().heightIn(min = 56.dp))
             }
             TextInput(
