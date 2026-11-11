@@ -136,6 +136,15 @@ All inputs are iOS inset fields: a filled cell (`cell` on the page, `fill` insid
 - **`PlainButton(text, onClick, bold, icon?, color?)`** is borderless accent text that dims while held, as in iOS.
 - **`BarIcon(icon, description, onClick)`** and **`BarButton(text, onClick, bold)`** are plain tinted controls for navigation bars and toolbars. Inside a bar's `actions`, M3 `IconButton`s also come out tinted, because the bar provides the accent as `LocalContentColor` (`Tinted { }`). New code should use `BarIcon`.
 
+### Pull to refresh (`components/PullRefresh.kt`)
+
+Built as a gesture, not Material's indicator. `rememberPullRefresh(onRefresh)` gives a `PullRefreshState`; put `Modifier.nestedScroll(state.connection)` on a parent of the scrolling content, `Modifier.pullRefreshContent(state)` on the content and `PullRefreshIndicator(state)` behind it (`PullRefresh(onRefresh) { }` does all three for a screen without a collapsing bar). On a `NavScreen`, put the connection **outside** the `NavScreen`: the large title then takes a downward drag first and the pull starts only once the title is fully open (`LoansScreen`).
+
+- The content follows the finger through a rubber band (`PullMath.rubber`: slope 0.9 at the start, never reaching the 160 dp range). The arrow fades in with the pull and turns over at the 64 dp threshold, with a tick.
+- Releasing past the threshold holds a spinner until `onRefresh` returns, then springs back (`Motion.push()`, critically damped); releasing early springs back at once. The finger's velocity is handed to the spring only in the direction of travel.
+- Interruptible: touching during the spring-back resumes from the offset on screen (`PullMath.raw` inverts the band). It only takes a downward drag the list had no room for, so it never fights the list's scrolling. Reduced motion replaces the springs with a 200 ms fade.
+
+
 ### Sheets, alerts, toasts
 
 - **`EditSheet(title, onDismiss, onSave, saveLabel, saveEnabled, onDelete) { … }`** is the iOS sheet. It has a grabber, a header with **Cancel** (left), the **title** (centre) and **Save** (right, semibold, disabled by `saveEnabled`), and a grouped-background body. `onSave = null` shows just **Done**. `onDelete` adds a red Delete row at the end. Save fires a confirm haptic. A form edits a copy and writes on Save, so pass `saveEnabled = changed` where the form can tell.

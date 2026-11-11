@@ -38,7 +38,9 @@ android/app/src/main/java/com/tally/book/
   model/       Db (DB, onDbRead), Book (freshDb), State (reset), Hooks (UiHooks), FileMeta
   data/        Ledger (load/lock/save), Crypto, Files (FileStore)
   sync/        family sync: SyncCrypto (HKDF, seal/open), Invite, Relay (+ HttpRelay), SyncModel (pure merge/push rules), SyncEngine, Sync (app wiring)
-  ui/          App.kt (Routes, AppNav, shell, SubScreen), theme/, components/ (the kit + Qr), lock/, loans/ (LoansScreen, loansGraph)
+  ui/          App.kt (Routes, AppNav, shell, SubScreen), theme/, components/ (the kit + Qr + PullRefresh), lock/,
+               loans/ (LoansScreen + Welcome + loansGraph, LoanDetail, LoanSheet, PaymentSheet, Attachments (photos, documents, FileStore glue),
+               FormBits, Words, SyncHooks (syncHook, syncStatusLine))
 android/app/src/test/   unit tests
 docs/DESIGN.md
 supabase/migrations/     the relay (tables + tally_* functions); deploy with `npx supabase db push --remote` from the repo root

@@ -52,7 +52,8 @@ val FILE_TYPES: Map<String, FileTypeInfo> = linkedMapOf(
 val FILE_LOOSE_MIME = listOf("", "application/octet-stream", "binary/octet-stream")
 /* the file picker's accept list, so it offers only what will be taken */
 val FILE_ACCEPT: String = FILE_TYPES.keys.joinToString(",") { ".$it" } + "," + FILE_TYPES.values.map { it.mime[0] }.distinct().joinToString(",")
-const val FILE_CAP_MB_DEFAULT = 25.0
+/** Tally keeps at most 4 MB per file: a photo is scaled before it is stored, a document is refused above this (docs/DESIGN.md "Files"). */
+const val FILE_CAP_MB_DEFAULT = 4.0
 val FILE_CAP_CHOICES = listOf(5.0, 10.0, 25.0, 50.0)
 
 /** Live file records: tombstones (deleted: true) are hidden, so filesOf/fileCount/fileById never show them. */
