@@ -154,7 +154,7 @@ object LockFlow {
     suspend fun enableBio(): Boolean {
         val act = MainActivity.current ?: return false
         if (!Crypto.locked) { Dialogs.tell(t("lock.setLockFirst", "Set a lock first.")); return false }
-        if (!Bio.available(act)) { Dialogs.tell(t("lock.err.noScreenLock", "this device has no fingerprint/screen lock set up, or the browser does not support it.")); return false }
+        if (!Bio.available(act)) { Dialogs.tell(t("lock.err.noFingerprint", "no fingerprint is set up on this phone.")); return false }
         val (ti, _) = confirmCopy(Crypto.type)
         if (!run(LockSession("bioconfirm", Crypto.type, ti, t("lock.forBio", "To set up fingerprint unlock."), true))) return false
         val r = Bio.enable(act)
@@ -162,7 +162,7 @@ object LockFlow {
         val e = r.exceptionOrNull()
         val why = when ((e as? Bio.Failure)?.name) {
             "NotAllowedError" -> t("lock.err.cancelled", "the fingerprint prompt was cancelled or timed out.")
-            "NotSupportedError" -> t("lock.err.noScreenLock", "this device has no fingerprint/screen lock set up, or the browser does not support it.")
+            "NotSupportedError" -> t("lock.err.noFingerprint", "no fingerprint is set up on this phone.")
             else -> e?.message?.takeIf { it.isNotBlank() } ?: t("lock.err.notSupported", "not supported")
         }
         Dialogs.tell(t("lock.bioSetupFailed", "Could not set up fingerprint unlock on this device: {why}", "why" to why))

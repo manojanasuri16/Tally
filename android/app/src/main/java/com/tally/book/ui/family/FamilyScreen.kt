@@ -278,6 +278,9 @@ private fun LockGroup() {
     val rev = rememberLedger()
     val scope = rememberCoroutineScope()
     val on = remember(rev) { Crypto.locked }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val bioAvail = remember { Bio.available(ctx) }
+    val bioOn = remember(rev) { Bio.on() }
     AGroup(
         title = t("applock.title", "App lock"),
         footer = if (on) t("applock.help.on", "Tally asks for your PIN when you open it.")
@@ -289,6 +292,18 @@ private fun LockGroup() {
                 icon = Icons.Rounded.Lock, chevron = true,
                 onClick = { scope.launch { LockFlow.setOrChange(if (on) Crypto.type else "pin") } },
             )
+        }
+        if (on) {
+            if (bioAvail) item {
+                SwitchRow(
+                    t("applock.fingerprint", "Unlock with fingerprint"), bioOn,
+                    { want ->
+                        scope.launch { if (want) LockFlow.enableBio() else { Bio.disable(); Ledger.bump() } }
+                    },
+                    Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    icon = Icons.Rounded.Fingerprint,
+                )
+            } else item { NoteRow(t("applock.noFingerprint", "To unlock with a fingerprint, first add one in your phone's settings.")) }
         }
         if (on) item {
             ARow(

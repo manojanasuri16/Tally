@@ -64,7 +64,7 @@ object Bio {
         val key = Crypto.key ?: return Result.failure(Failure("NoLock", t("lock.setLockFirst", "Set a lock first.")))
         when (BiometricManager.from(act).canAuthenticate(BIOMETRIC_STRONG)) {
             BiometricManager.BIOMETRIC_SUCCESS -> Unit
-            else -> return Result.failure(Failure("NotSupportedError", t("lock.err.noScreenLock", "this device has no fingerprint/screen lock set up, or the browser does not support it.")))
+            else -> return Result.failure(Failure("NotSupportedError", t("lock.err.noFingerprint", "no fingerprint is set up on this phone.")))
         }
         return runCatching {
             disable()
