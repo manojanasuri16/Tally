@@ -5,7 +5,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -258,8 +261,11 @@ fun qrMatrix(text: String): Array<IntArray> {
 /** Draws [text] as a QR code, dark modules on a white square (always white, so scanners read it in dark mode too). Text too long for version 40 draws nothing. */
 @Composable
 fun QrCode(text: String, modifier: Modifier = Modifier, size: Dp = 220.dp) {
-    val m = remember(text) { runCatching { qrMatrix(text) }.getOrNull() } ?: return
+    // Choosing a mask now reads each candidate back with ZXing (tens to hundreds of ms on a phone), so build it off the main thread;
+    // the white square keeps its place meanwhile, so nothing jumps when the code appears.
+    val m by produceState<Array<IntArray>?>(null, text) { value = withContext(Dispatchers.Default) { runCatching { qrMatrix(text) }.getOrNull() } }
     Canvas(modifier.size(size).background(Color.White).padding(8.dp)) {
+        val m = m ?: return@Canvas
         val cell = this.size.width / m.size
         for (y in m.indices) for (x in m[y].indices) if (m[y][x] == 1)
             drawRect(Color.Black, Offset(x * cell, y * cell), Size(cell + 0.5f, cell + 0.5f))
