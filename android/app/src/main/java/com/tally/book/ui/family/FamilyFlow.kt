@@ -50,20 +50,25 @@ object FamilyFlow {
      * Asks "<Inviter> is inviting you to <Family>. Join?" (or "Join <Family>?" for an invite that does not say who sent it; both names
      * come from the invite, before anything is saved), then joins. True when this phone is now in the family.
      */
-    suspend fun join(invite: Invite): Boolean {
+    suspend fun join(invite: Invite, back: Boolean = false): Boolean {
         val view = Sync.membership()
-        if (view.inFamily || view.joining != null) {
-            Dialogs.tell(t("join.already", "This phone is already in a family. Leave it first if you want to join another."))
+        // back on a new phone may also ask while this phone holds that same family from a restored backup
+        val sameFamily = view.inFamily && view.familyId == invite.familyId
+        if (view.joining != null || (view.inFamily && !(back && sameFamily))) {
+            Dialogs.tell(
+                if (sameFamily) t("join.sameFamily", "This phone is already in {name}.", "name" to view.familyName)
+                else t("join.already", "This phone is already in a family. Leave it first if you want to join another."),
+            )
             return false
         }
-        val ok = Dialogs.ask(joinQuestion(invite), t("join.ok", "Join"))
+        val ok = Dialogs.ask(if (back) backQuestion(invite) else joinQuestion(invite), t("join.ok", "Join"))
         if (!ok) return false
         busy.value = t("join.busy", "Joining…")
         val result = try {
             Sync.detached {
                 // a family from 0.1.0/0.2.0 is dead; the person chose another family, so it is forgotten first (the loans stay)
                 if (view.oldFamily) Sync.engine.leaveFamily()
-                Sync.engine.requestJoin(invite)
+                Sync.engine.requestJoin(invite, back)
             }
         } finally { busy.value = null }
         // the request is with the family now; an admin lets this phone in (the next sync enters the family).
@@ -85,6 +90,16 @@ object FamilyFlow {
             ?: t("join.askName", "Join {name}?", "name" to invite.name)
         return head + "\n\n" + body
     }
+
+    /** The question for someone back on a new phone: an admin decides who they are, and their old phone stops working. */
+    fun backQuestion(invite: Invite): String = t(
+        "join.back.ask",
+        "Come back to {name} on this phone?\n\nAn admin will check it is you. Then this phone takes the place of your old one, which stops working.",
+        "name" to invite.name,
+    )
+
+    /** An invite link that opened the app, kept in memory only (never saved) until the Join screen takes it. */
+    var offered: Invite? = null
 
     /** Makes the family and shares this phone's loans. True when this phone is now in a family. */
     suspend fun create(name: String): Boolean {
@@ -166,6 +181,16 @@ object FamilyFlow {
     suspend fun allow(r: JoinRequest) {
         val result = Sync.detached { Sync.engine.approve(r.id) }
         if (decided(r.id, result)) Dialogs.snack(t("req.allowed", "{name} is allowed in. Their phone joins in a moment.", "name" to r.name))
+    }
+
+    /** Allow as <member>: someone back on a new phone takes [m]'s place (asks once; [m]'s old phone stops working). */
+    suspend fun allowAs(r: JoinRequest, m: FamilyMember) {
+        val name = shownName(m)
+        if (!Dialogs.ask(MemberText.allowAsQuestion(name), t("req.allowAs", "Allow as {name}", "name" to name))) return
+        busy.value = t("req.allowing", "Letting them in…")
+        val result = try { Sync.detached { Sync.engine.approveAs(r.id, m.id) } } finally { busy.value = null }
+        if (result == SyncResult.Replaced) return                // this was the admin's own old phone: the Family page says so
+        if (decided(r.id, result)) Dialogs.snack(t("req.allowedAs", "{name}'s new phone joins in a moment.", "name" to name))
     }
 
     /** Don't allow: asks once, then tells the asking phone it was not let in. */

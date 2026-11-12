@@ -43,6 +43,13 @@ fun InFamily(view: MembershipView, onInvite: () -> Unit) {
     val lastAt = remember(rev, state) { Sync.lastSyncedAt() }
     val now = Clock.millis()
     val members = remember(view) { view.members.sortedByDescending { it.me } }
+    // once ever, when the only admin first has someone else in the family: only an admin can let a member back in on a new phone
+    LaunchedEffect(view.iAmAdmin, view.members.size) {
+        if (MemberText.needsSecondAdmin(view.iAmAdmin, view.members) && DevicePrefs.get("tally-admin-hint") == null) {
+            DevicePrefs.set("tally-admin-hint", "1")
+            Dialogs.tell(t("hint.secondAdmin", "Make someone else an admin too, in case you lose this phone.\n\nOnly an admin can let someone back in on a new phone. Tap a person, then Make admin."))
+        }
+    }
 
     AGroup(title = view.familyName, footer = t("family.safe", "Only your family can read what you share.")) {
         members.forEach { m ->

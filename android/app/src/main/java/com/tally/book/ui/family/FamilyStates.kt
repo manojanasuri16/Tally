@@ -28,7 +28,7 @@ fun WaitingCard(j: PendingJoin) {
     val state by Sync.engine.state.collectAsStateWithLifecycle()
     val fam = j.familyName.ifBlank { t("family.the", "the family") }
     Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(t("wait.title", "Waiting for an admin to let you in"), style = Apple.type.title2, color = Apple.colors.label)
+        Text(if (j.back) t("wait.back.title", "Waiting for an admin to let this phone in as you") else t("wait.title", "Waiting for an admin to let you in"), style = Apple.type.title2, color = Apple.colors.label)
         val body = j.inviter?.takeIf { it.isNotBlank() }
             ?.let { t("wait.body.from", "{inviter} invited you to {name}. This phone joins by itself once an admin allows it.", "inviter" to it, "name" to fam) }
             ?: t("wait.body", "You asked to join {name}. This phone joins by itself once an admin allows it.", "name" to fam)
@@ -49,6 +49,7 @@ fun GoneCard(g: FamilyGone) {
     val fam = g.familyName.ifBlank { t("family.the", "the family") }
     val text = when (g.why) {
         "removed" -> t("gone.removed", "You were removed from {name}. Your loans are still on this phone.", "name" to fam)
+        "replaced" -> t("gone.replaced", "This phone was replaced by a new phone. It is no longer in {name}. Your loans are still on this phone.", "name" to fam)
         "denied" -> t("gone.denied", "An admin did not let you into {name}.", "name" to fam)
         else -> t("gone.expired", "Your request to join {name} ran out. Ask for a new code to try again.", "name" to fam)
     }

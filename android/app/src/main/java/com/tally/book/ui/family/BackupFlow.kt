@@ -27,6 +27,7 @@ import com.tally.book.MainActivity
 import com.tally.book.core.*
 import com.tally.book.data.*
 import com.tally.book.model.DB
+import com.tally.book.sync.Membership
 import com.tally.book.sync.Sync
 import com.tally.book.sync.SyncModel
 import com.tally.book.ui.AppNav
@@ -142,6 +143,8 @@ object BackupFlow {
         if (!Dialogs.ask(question, if (undo) t("backup.undo.ok", "Undo") else t("backup.restore.ok", "Restore"), danger = true)) return
 
         val keyBefore = Crypto.key?.copyOf()
+        // this phone may have come back to its family on a new phone after the backup was made: it keeps that newer place
+        val bookBefore = DB.copyObj()
         val codeBefore = DB.s("recoveryCode")
         FamilyFlow.busy.value = t("backup.restoring", "Restoring…")
         val failure: String? = try {
@@ -157,6 +160,7 @@ object BackupFlow {
                             else -> Crypto.clearLock()
                         }
                         val next = data.copyObj()
+                        if (!undo) Membership.keepNewerSeat(next, bookBefore)
                         if (Crypto.locked) next["lockType"] = Crypto.type
                         when {
                             // the phone's lock keeps its recovery code inside the book, whatever the backup held

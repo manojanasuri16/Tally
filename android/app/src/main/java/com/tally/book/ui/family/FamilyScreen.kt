@@ -85,8 +85,12 @@ fun FamilyScreen() {
             when {
                 view.gone != null -> GoneCard(view.gone)
                 view.oldFamily -> OldFamilyCard(onSetUp = { starting = true })
-                view.joining != null -> WaitingCard(view.joining)
-                view.inFamily -> InFamily(view, onInvite = { inviting = true })
+                view.joining != null && !view.inFamily -> WaitingCard(view.joining)
+                view.inFamily -> {
+                    // a restored phone asking to come back as itself keeps its family while it waits
+                    if (view.joining != null) WaitingCard(view.joining)
+                    InFamily(view, onInvite = { inviting = true })
+                }
                 else -> NoFamily(onStart = { starting = true })
             }
             EasyModeGroup()
@@ -150,7 +154,10 @@ fun JoinScreen() {
     val haptics = rememberHaptics()
     var code by remember { mutableStateOf("") }      // not rememberSaveable: the invite is never written to saved state
     var problem by remember { mutableStateOf<String?>(null) }
-    val invite = remember(code) { Invite.find(code) }
+    // an invite link that opened the app comes here in memory only
+    val linked = remember { FamilyFlow.offered.also { FamilyFlow.offered = null } }
+    val invite = remember(code) { Invite.find(code) ?: linked.takeIf { code.isBlank() } }
+    var back by remember { mutableStateOf(false) }
 
     SubScreen(t("join.title", "Join my family")) { pad ->
         Column(
@@ -172,7 +179,17 @@ fun JoinScreen() {
                         )
                     }
                 }
-                PrimaryButton(t("join.ok", "Join"), { scope.launch { FamilyFlow.join(invite) } }, Modifier.fillMaxWidth().heightIn(min = 56.dp))
+                // someone who was already in this family on another phone comes back as the same person; an admin picks who
+                AGroup(footer = t("join.back.help", "Have a backup from your old phone? Restore it first from the welcome screen.")) {
+                    item {
+                        SwitchRow(
+                            t("join.back", "I was already in this family (new phone)"), back, { back = it },
+                            Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                            subtitle = t("join.back.sub", "Your old phone stops working once an admin allows it."), icon = Icons.Rounded.PhonelinkSetup,
+                        )
+                    }
+                }
+                PrimaryButton(t("join.ok", "Join"), { scope.launch { FamilyFlow.join(invite, back) } }, Modifier.fillMaxWidth().heightIn(min = 56.dp))
             }
             TextInput(
                 code, { code = it; problem = null }, t("join.paste.label", "Or paste the code"),
@@ -413,7 +430,12 @@ fun InviteIntake() {
         com.tally.book.pendingInvite = null
         scope.launch {
             val invite = Invite.find(raw)
-            if (invite == null) Dialogs.tell(if (Invite.isOld(raw)) SyncText.oldCode() else t("sync.notCode", "This is not a Tally family code.")) else FamilyFlow.join(invite)
+            if (invite == null) Dialogs.tell(if (Invite.isOld(raw)) SyncText.oldCode() else t("sync.notCode", "This is not a Tally family code."))
+            else {
+                // the Join screen shows the family, asks whether this person was already in it, and joins from there
+                FamilyFlow.offered = invite
+                AppNav.go(ROUTE_JOIN)
+            }
         }
     }
     LaunchedEffect(named) { take() }
