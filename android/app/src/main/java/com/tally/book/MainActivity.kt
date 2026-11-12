@@ -1,11 +1,17 @@
 package com.tally.book
 
 import android.content.Intent
+import android.content.res.Configuration
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
@@ -23,6 +29,7 @@ import com.tally.book.ui.family.FastPoll
 import com.tally.book.ui.components.Dialogs
 import com.tally.book.ui.theme.Appearance
 import com.tally.book.ui.theme.TallyTheme
+import com.tally.book.ui.theme.ThemeMode
 import kotlinx.coroutines.launch
 
 /** Text shared to Tally (a bank SMS, from the share sheet), waiting for the screen that will use it ("Log payment"). Null once taken. */
@@ -61,7 +68,7 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         current = this
         splash.setKeepOnScreenCondition { Ledger.phase.value == Ledger.Phase.LOADING }
-        enableEdgeToEdge()
+        applyChrome(ThemeMode.stored())
         UiHooks.ask = { m, ok, danger -> Dialogs.ask(m, ok, danger) }
         UiHooks.tell = { m -> Dialogs.tell(m) }
         UiHooks.hint = { m -> Dialogs.snack(m) }
@@ -73,24 +80,41 @@ class MainActivity : FragmentActivity() {
             val rev by Ledger.rev.collectAsStateWithLifecycle()
             val phase by Ledger.phase.collectAsStateWithLifecycle()
             val appearance = remember(rev, phase) { appearance(phase == Ledger.Phase.READY) }
+            // the window behind the app and the system bars' icons follow the setting at once, not only the phone's mode
+            val sysDark = isSystemInDarkTheme()
+            LaunchedEffect(appearance.mode, sysDark) { applyChrome(appearance.mode) }
             TallyTheme(appearance) { TallyRoot(); com.tally.book.ui.lock.LockOverlayHost() }
         }
     }
 
-    /** Appearance from the book once it is open; before that from the device copy (the lock screen follows the app). */
-    private fun appearance(ready: Boolean): Appearance =
-        if (ready) Appearance(
-            mode = DB.s("themeMode").ifEmpty { "system" },
+    /**
+     * The mode is the device setting (the same before and after unlock); the accent colour comes from the book once it is open,
+     * and from its device copy before that (the lock screen follows the app).
+     */
+    private fun appearance(ready: Boolean): Appearance {
+        // a book from before the mode became a device setting: take its value once
+        if (ready && DevicePrefs.get(ThemeMode.KEY) == null) DB.s("themeMode").takeIf { it.isNotEmpty() }?.let { ThemeMode.set(it) }
+        val mode = ThemeMode.stored()
+        return if (ready) Appearance(
+            mode = mode,
             color = DB.s("colorTheme").ifEmpty { "blue" },
             customAccent = DB.s("customAccent").ifEmpty { "#0071E3" },
-        ).also {
-            DevicePrefs.set("tally-theme-mode", it.mode); DevicePrefs.set("tally-colortheme", it.color); DevicePrefs.set("tally-custom-accent", it.customAccent)
-        }
+        ).also { DevicePrefs.set("tally-colortheme", it.color); DevicePrefs.set("tally-custom-accent", it.customAccent) }
         else Appearance(
-            mode = DevicePrefs.get("tally-theme-mode") ?: "system",
+            mode = mode,
             color = DevicePrefs.get("tally-colortheme") ?: "blue",
             customAccent = DevicePrefs.get("tally-custom-accent") ?: "#0071E3",
         )
+    }
+
+    /** Paints the window behind the app and sets the status and navigation bar icons for the resolved mode (so a forced mode has no flash). */
+    private fun applyChrome(mode: String) {
+        val systemDark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        val dark = ThemeMode.isDark(mode, systemDark)
+        window.setBackgroundDrawable(ColorDrawable(ThemeMode.windowColor(mode, systemDark)))
+        val bars = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark }
+        enableEdgeToEdge(bars, bars)
+    }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)

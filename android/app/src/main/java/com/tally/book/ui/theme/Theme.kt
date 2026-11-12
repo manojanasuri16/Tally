@@ -26,7 +26,7 @@ import androidx.core.graphics.ColorUtils
  * Balance's look, the one version 1.0.0 had: Apple-style grouped lists, set in Inter, with cards outlined by a hairline
  * and, in Black, surfaces and hairlines tinted with the accent. Built on Compose Material 3 as the base library.
  *
- * Mode (DB.themeMode): system / light / dark / black ("normal" from the web app reads as light).
+ * Mode (device setting "tally-theme-mode", see ThemeMode): system / light / dark (an older "black" still works; "normal" reads as light).
  * Colour (DB.colorTheme): the eight web themes, "custom" (DB.customAccent), or "dynamic" (the
  * phone's wallpaper colours, Android 12+). Light and Dark keep neutral surfaces; Black mixes the accent into them.
  *
@@ -191,7 +191,7 @@ private fun scheme(a: AppleColors): ColorScheme {
 data class Appearance(val mode: String = "system", val color: String = "blue", val customAccent: String = "#0071E3", val fontScale: Float = 1f)
 
 @Composable
-fun isDarkFor(mode: String): Boolean = when (mode) { "dark", "black" -> true; "light", "normal" -> false; else -> isSystemInDarkTheme() }
+fun isDarkFor(mode: String): Boolean = ThemeMode.isDark(mode, isSystemInDarkTheme())
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

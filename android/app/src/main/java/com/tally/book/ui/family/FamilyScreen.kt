@@ -41,6 +41,7 @@ import com.tally.book.ui.lock.Bio
 import com.tally.book.ui.lock.LockFlow
 import com.tally.book.ui.theme.Apple
 import com.tally.book.ui.theme.LocalSemantic
+import com.tally.book.ui.theme.ThemeMode
 import kotlinx.coroutines.launch
 
 /*
@@ -84,6 +85,7 @@ fun FamilyScreen() {
             }
             MyNameGroup()
             LanguageGroup()
+            AppearanceGroup()
             LockGroup()
             BackupGroup()
             PrivacyGroup()
@@ -213,6 +215,28 @@ private fun LanguageGroup() {
                     label, icon = Icons.Rounded.Translate,
                     onClick = { DevicePrefs.set("tally-lang", code); I18n.setLanguage(code); Ledger.bump() },
                     trailing = if (lang == code) ({ Icon(Icons.Rounded.Check, t("lang.selected", "Selected"), tint = Apple.colors.accent) }) else null,
+                )
+            }
+        }
+    }
+}
+
+/** Automatic / Light / Dark. A device setting: it applies at once, everywhere (lock screen included), and is not in the book or a backup. */
+@Composable
+private fun AppearanceGroup() {
+    val rev = rememberLedger()
+    val current = remember(rev) { ThemeMode.choiceOf(ThemeMode.stored()) }
+    AGroup(title = t("appearance.title", "Appearance")) {
+        listOf(
+            Triple("system", t("appearance.system", "Automatic (follows the phone)"), Icons.Rounded.BrightnessAuto),
+            Triple("light", t("appearance.light", "Light"), Icons.Rounded.LightMode),
+            Triple("dark", t("appearance.dark", "Dark"), Icons.Rounded.DarkMode),
+        ).forEach { (code, label, icon) ->
+            item {
+                ARow(
+                    label, icon = icon,
+                    onClick = { ThemeMode.set(code); Ledger.bump() },
+                    trailing = if (current == code) ({ Icon(Icons.Rounded.Check, t("lang.selected", "Selected"), tint = Apple.colors.accent) }) else null,
                 )
             }
         }
