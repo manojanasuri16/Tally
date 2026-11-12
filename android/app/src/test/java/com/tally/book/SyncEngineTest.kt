@@ -25,12 +25,13 @@ class SyncEngineTest {
         a.payment("p1", "l1", 23000)
         a.file("f1", "payment", "p1", byteArrayOf(1, 2, 3, 4))
         done(runBlocking { a.engine.createFamily("Home") })
-        return a.engine.inviteText(a.db)!!
+        return a.invite()
     }
 
+    /** Every record on the relay, opened with the keyring of the phone whose family this is. */
     private fun openAll(fam: Obj): List<String> {
-        val enc = SyncCrypto.encKey(Base64.getDecoder().decode(fam.s("key")))
-        return relay.records[fam.s("id")]!!.map { (id, row) -> SyncCrypto.openRecord(enc, fam.s("id"), id, row.blob)!! }
+        val keys = fam.o("keys")!!.entries.associate { (e, k) -> e.toInt() to SyncCrypto.encKey(Base64.getDecoder().decode(k as String)) }
+        return relay.records[fam.s("id")]!!.map { (id, row) -> String(SyncCrypto.openE({ keys[it] }, row.blob, SyncCrypto.recordAad(fam.s("id"), id))!!) }
     }
 
     @Test fun createAndJoinConverge() {
@@ -40,14 +41,16 @@ class SyncEngineTest {
         assertTrue(a.db.o("sync").o("dirty")!!.isEmpty())
         assertEquals(1, a.db.objs("members").size)
 
-        val r = done(runBlocking { b.engine.joinFamily(invite) })
+        val r = done(b.joinVia(a, invite))
         assertEquals(1, r.filesDown)
         assertArrayEquals(byteArrayOf(1, 2, 3, 4), b.files.bytes["f1"])
         assertEquals("SBI home loan", b.rec("loans", "l1")!!.s("name"))
         assertEquals(2, b.db.objs("members").size)
         done(a.sync())
         assertEquals(a.shared(), b.shared())
-        assertEquals(a.db.o("family"), b.db.o("family"))
+        assertEquals(a.db.o("family").s("id"), b.db.o("family").s("id"))
+        assertEquals(a.db.o("family").o("keys"), b.db.o("family").o("keys"))      // the key reached B sealed to B's own key pair
+        assertNotEquals(a.db.o("family").o("me").s("secret"), b.db.o("family").o("me").s("secret"))   // each phone its own credential
         assertEquals("Home", b.db.o("family").s("name"))       // the family's name, not the inviter's
 
         // the relay holds nothing readable
@@ -55,14 +58,18 @@ class SyncEngineTest {
             val raw = String(Base64.getDecoder().decode(row.blob), Charsets.ISO_8859_1)
             assertFalse(raw.contains("SBI")); assertFalse(raw.contains("23000"))
         }
-        assertEquals(SyncCrypto.tokenHash(SyncCrypto.authToken(Base64.getDecoder().decode(a.db.o("family").s("key")))), relay.families.values.single())
+        // the relay holds only hashes of the credentials, and never a key
+        val fam = relay.fams[a.db.o("family").s("id")]!!
+        assertEquals(SyncCrypto.tokenHash(a.db.o("family").o("me").s("secret")), fam.members["m-A"]!!.hash)
+        assertEquals(setOf("m-A", "m-B"), fam.members.keys)
+        assertEquals("admin", fam.members["m-A"]!!.role); assertEquals("member", fam.members["m-B"]!!.role)
     }
 
     @Test fun threePhonesLastWriterWins() {
         val a = Phone("A", relay); val b = Phone("B", relay); val c = Phone("C", relay)
         val invite = family(a)
-        done(runBlocking { b.engine.joinFamily(invite) })
-        done(runBlocking { c.engine.joinFamily(invite) })
+        done(b.joinVia(a, invite))
+        done(c.joinVia(a))
         a.edit("loans", "l1") { it["name"] = "by A" }
         b.edit("loans", "l1") { it["name"] = "by B" }          // later
         c.payment("p2", "l1", 500); b.payment("p3", "l1", 700)
@@ -87,9 +94,12 @@ class SyncEngineTest {
         for (i in 1..6) a.payment("px$i", "l1", i * 100)
         done(a.sync())
         val b = Phone("B", relay, pageSize = 2)
-        // join's check pull, then page 1 ok, then page 2 fails
-        relay.failPull.addAll(listOf(null, null, SyncError.Offline))
-        val r = runBlocking { b.engine.joinFamily(invite) }
+        assertEquals(SyncResult.JoinPending, runBlocking { b.engine.requestJoin(invite) })
+        done(a.sync())
+        done(runBlocking { a.engine.approve(a.engine.requests.value.single().id) })
+        // B's sync: it enters the family, then page 1 ok, then page 2 fails
+        relay.failPull.addAll(listOf(null, SyncError.Offline))
+        val r = b.sync()
         assertEquals(SyncResult.Failed(SyncError.Offline), r)
         val cursor = b.db.o("sync").num("cursor").toLong()
         assertTrue(cursor > 0)
@@ -107,7 +117,7 @@ class SyncEngineTest {
     @Test fun failedPushKeepsDirtyMarks() {
         val a = Phone("A", relay); val b = Phone("B", relay)
         val invite = family(a)
-        done(runBlocking { b.engine.joinFamily(invite) })
+        done(b.joinVia(a, invite))
         b.payment("p9", "l1", 999)
         relay.failPush.add(SyncError.Server(503, "paused"))
         assertEquals(SyncResult.Failed(SyncError.Server(503, "paused")), b.sync())
@@ -121,7 +131,7 @@ class SyncEngineTest {
     @Test fun editDuringPushStaysDirtyAndAnotherSyncIsBusy() {
         val a = Phone("A", relay); val b = Phone("B", relay)
         val invite = family(a)
-        done(runBlocking { b.engine.joinFamily(invite) })
+        done(b.joinVia(a, invite))
         a.edit("loans", "l1") { it["name"] = "first" }
         var busy: SyncResult? = null
         relay.onPush = {
@@ -147,7 +157,7 @@ class SyncEngineTest {
         val fid = a.db.o("family").s("id")
         assertNull(relay.records[fid]!!["lp"]); assertNull(relay.records[fid]!!["pp"]); assertNull(relay.records[fid]!!["fp"])
         assertNull(relay.blobs[fid]!!["fp"])
-        done(runBlocking { b.engine.joinFamily(invite) })
+        done(b.joinVia(a, invite))
         assertNull(b.rec("loans", "lp"))
         assertTrue(a.db.o("sync").o("blobsUp")!!.b("fp"))         // kept for if it is ever shared
 
@@ -181,11 +191,16 @@ class SyncEngineTest {
 
     @Test fun badInvitesAndWrongKeysChangeNothing() {
         val a = Phone("A", relay); val b = Phone("B", relay)
-        val invite = Invite.parse(family(a))!!
+        val text = family(a)
+        val invite = Invite.parse(text)!!
         val before = JsonCodec.stringify(b.db)
-        assertEquals(SyncResult.BadInvite, runBlocking { b.engine.joinFamily("tally://join#nope") })
-        val forged = Invite(invite.familyId, ByteArray(32) { 7 }, invite.name)
-        assertEquals(SyncResult.Failed(SyncError.Unauthorised), runBlocking { b.engine.joinFamily(forged) })
+        assertEquals(SyncResult.BadInvite, runBlocking { b.engine.requestJoin("tally://join#nope") })
+        // an invite as 0.2.0 made them (it carried the family key): refused with its own answer
+        val old = Invite.PREFIX + invite.familyId + "." + Invite.b64url(ByteArray(32) { 3 }) + "." + Invite.b64url("Home".toByteArray())
+        assertEquals(SyncResult.OldInvite, runBlocking { b.engine.requestJoin(old) })
+        // a code with a secret the family never made: the relay knows no such invite
+        val forged = Invite(invite.familyId, ByteArray(32) { 7 }, invite.expiresAt, invite.name)
+        assertEquals(SyncResult.Failed(SyncError.InviteGone), runBlocking { b.engine.requestJoin(forged) })
         assertEquals(before, JsonCodec.stringify(b.db))
         // already in a family
         assertEquals(SyncResult.AlreadyInFamily, runBlocking { a.engine.createFamily("Other") })
@@ -194,7 +209,7 @@ class SyncEngineTest {
         val fid = invite.familyId
         val p1 = relay.records[fid]!!["p1"]!!
         relay.records[fid]!!["p1x"] = FakeRelay.Row("payment", p1.blob, 10_000)
-        done(runBlocking { b.engine.joinFamily(invite) }).let { assertEquals(1, it.skipped) }
+        done(b.joinVia(a, text)).let { assertEquals(1, it.skipped) }
         assertNull(b.rec("payments", "p1x"))
     }
 
@@ -238,7 +253,7 @@ class SyncEngineTest {
     @Test fun aDeletedFileIsNotMissingBytesToDownload() {
         val a = Phone("A", relay); val b = Phone("B", relay); val c = Phone("C", relay)
         val invite = family(a)
-        done(runBlocking { b.engine.joinFamily(invite) })
+        done(b.joinVia(a, invite))
         // what the UI does when a document is deleted: tombstone the record, leave the queue, drop the bytes
         a.put("files", obj("id" to "f1", "ownerType" to "payment", "ownerId" to "p1", "deleted" to true))
         a.files.bytes.remove("f1")
@@ -248,7 +263,7 @@ class SyncEngineTest {
         relay.blobs[fid]!!.remove("f1")
         val before = relay.blobGets
         // a phone that joins now gets the tombstone, asks for no bytes, and does not count it as a file it failed to get
-        val r = done(runBlocking { c.engine.joinFamily(invite) })
+        val r = done(c.joinVia(a))
         assertEquals(0, r.filesDown); assertEquals(0, r.skipped)
         assertTrue(c.rec("files", "f1")!!.b("deleted"))
         assertFalse(runBlocking { c.engine.fetchFile("f1") })

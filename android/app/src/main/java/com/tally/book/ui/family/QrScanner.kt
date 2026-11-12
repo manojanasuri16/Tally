@@ -77,7 +77,7 @@ fun ScanScreen() {
         if (invite == null) {
             // a different QR code: say so quietly, and not again for a few seconds
             val now = Clock.millis()
-            if (now - lastNote.get() > 3_000) { lastNote.set(now); note = notCode; scope.launch { kotlinx.coroutines.delay(2_500); note = null } }
+            if (now - lastNote.get() > 3_000) { lastNote.set(now); note = if (Invite.isOld(text)) SyncText.oldCode() else notCode; scope.launch { kotlinx.coroutines.delay(2_500); note = null } }
             return
         }
         if (!listening.compareAndSet(true, false)) return

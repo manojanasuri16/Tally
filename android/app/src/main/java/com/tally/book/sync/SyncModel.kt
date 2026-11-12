@@ -213,17 +213,23 @@ object SyncModel {
     fun liveFiles(db: Obj): List<FileWant> = db.objs("files").filter { !it.b("deleted") && it["id"] is String }
         .map { FileWant(it.s("id"), it.s("sha256"), it.num("size").toLong(), it.s("mime")) }
 
-    /** Adds or refreshes this phone's member record ([me] = DB.me) and marks it dirty. */
-    fun upsertMe(db: Obj, now: Long) {
+    /**
+     * Adds or refreshes this phone's member record ([me] = DB.me) and marks it dirty. [pub] is this phone's public key in
+     * the family (base64url SPKI), carried in the record so the other phones can seal new keys to it (docs/DESIGN.md, "Membership").
+     */
+    fun upsertMe(db: Obj, now: Long, pub: String? = null) {
         val me = db.oo("me")
         if (me.s("id").isEmpty()) me["id"] = uid("m")
         val id = me.s("id")
         val list = db.aa("members")
         val cur = list.firstOrNull { it.asObj()?.get("id") == id }.asObj()
-        if (cur != null && cur.s("name") == me.s("name") && !cur.b("deleted")) { dirty(db)[id] = true; return }
+        if (cur != null && cur.s("name") == me.s("name") && !cur.b("deleted") && !cur.b("left") && (pub == null || cur.s("pub") == pub)) {
+            dirty(db)[id] = true; return
+        }
         val rec = cur ?: obj("id" to id, "at" to now.toDouble()).also { list.add(it) }
         rec["name"] = me.s("name")
-        rec.remove("deleted")
+        if (pub != null) rec["pub"] = pub
+        rec.remove("deleted"); rec.remove("left")
         rec["updatedAt"] = now.toDouble(); rec["updatedBy"] = id
         dirty(db)[id] = true
     }

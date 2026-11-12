@@ -14,22 +14,22 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /*
- * The app's sync: one SyncEngine wired to the Supabase relay from BuildConfig, the Ledger and the FileStore.
- * Screens call Sync.engine.createFamily / joinFamily / leaveFamily / sync (or Sync.syncInBackground()) and observe
- * Sync.engine.state.
+ * The app's sync: one SyncEngine wired to the Supabase relay from BuildConfig, the Ledger, the FileStore and the background
+ * check (Notices). Screens call Sync.engine.* (createFamily, requestJoin, newInvite, approve, deny, setAdmin, removeMember,
+ * leaveFamily, sync...) through Sync.detached, observe Sync.engine.state and Sync.engine.requests, and read Sync.membership().
  */
 object Sync {
     val configured: Boolean get() = BuildConfig.SUPABASE_URL.isNotBlank() && BuildConfig.SUPABASE_ANON_KEY.isNotBlank()
 
-    val engine: SyncEngine by lazy {
-        SyncEngine(HttpRelay(BuildConfig.SUPABASE_URL, BuildConfig.SUPABASE_ANON_KEY), LedgerBook, StoreFiles)
-    }
+    val relay: Relay by lazy { HttpRelay(BuildConfig.SUPABASE_URL, BuildConfig.SUPABASE_ANON_KEY) }
+
+    val engine: SyncEngine by lazy { SyncEngine(relay, LedgerBook, StoreFiles, notices = Notices.store) }
 
     private val scope = MainScope()
 
-    /** Starts a sync that outlives the screen that asked for it (pull to refresh, app open). No-op without a family. */
+    /** Starts a sync that outlives the screen that asked for it (pull to refresh, app open). No-op without a family or a waiting join. */
     fun syncInBackground() {
-        if (!hasFamily()) return
+        if (!hasFamily() && !isJoining()) return
         scope.launch { engine.sync() }
     }
 
@@ -39,10 +39,14 @@ object Sync {
      */
     suspend fun <T> detached(block: suspend () -> T): T = scope.async { block() }.await()
 
-    fun hasFamily(db: Obj = DB): Boolean = db.o("family")?.s("id")?.isNotEmpty() == true
+    /** A family is in the book (a version-2 one, or an old one that needs setting up again: see [membership]). */
+    fun hasFamily(db: Obj = DB): Boolean = Membership.hasFamily(db)
 
-    /** The invite text for this phone's family, or null. Show it only on demand. */
-    fun inviteText(db: Obj = DB): String? = engine.inviteText(db)
+    /** This phone asked to join and is waiting for an admin. */
+    fun isJoining(db: Obj = DB): Boolean = db.o("joining") != null
+
+    /** Members, roles, invites, a waiting join, why the family went. Join requests: [SyncEngine.requests]. */
+    fun membership(db: Obj = DB): MembershipView = engine.membership(db)
 
     /** When this book last synced (epoch ms), 0 = never. */
     fun lastSyncedAt(db: Obj = DB): Long = db.o("sync").num("lastAt").toLong()

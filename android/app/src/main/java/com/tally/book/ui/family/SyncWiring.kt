@@ -36,7 +36,7 @@ fun installSyncHooks() {
 
 /** Pull down on the home screen. Silent when it worked; one plain sentence when it did not, or an offer to set sharing up. */
 suspend fun pullToRefresh() {
-    if (!Sync.hasFamily()) {
+    if (!Sync.hasFamily() && !Sync.isJoining()) {
         Dialogs.snack(t("sync.noFamily", "You are not sharing with your family yet."), t("sync.setUp", "Set up")) { FamilyFlow.openFamily() }
         return
     }
@@ -48,10 +48,11 @@ fun SyncStatusLine() {
     val state by Sync.engine.state.collectAsStateWithLifecycle()
     val rev = rememberLedger()
     val has = remember(rev) { Sync.hasFamily() }
+    val joining = remember(rev) { Sync.isJoining() }
     val lastAt = remember(rev, state) { Sync.lastSyncedAt() }
     var now by remember { mutableLongStateOf(Clock.millis()) }
     LaunchedEffect(Unit) { while (true) { delay(30_000); now = Clock.millis() } }
-    val line = SyncText.status(state, has, lastAt, maxOf(now, lastAt))
+    val line = SyncText.status(state, has, lastAt, maxOf(now, lastAt), joining)
     val tap: (() -> Unit)? = when (line.action) {
         SyncText.Action.SET_UP -> ({ FamilyFlow.openFamily() })
         SyncText.Action.RETRY -> ({ Sync.syncInBackground() })

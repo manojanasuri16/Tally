@@ -39,7 +39,7 @@ class SyncRestoreTest {
         a.payment("p1", "l1", 23000)
         a.file("f1", "payment", "p1", byteArrayOf(1, 2, 3, 4))
         done(runBlocking { a.engine.createFamily("Home") })
-        done(runBlocking { b.engine.joinFamily(a.engine.inviteText(a.db)!!) })
+        done(b.joinVia(a))
         done(a.sync())
     }
 

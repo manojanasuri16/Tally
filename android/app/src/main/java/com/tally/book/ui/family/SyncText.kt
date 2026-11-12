@@ -33,6 +33,13 @@ object SyncText {
         SyncError.Unauthorised ->
             if (joining) t("sync.err.badCode", "This family code does not work. Ask for a new one.")
             else t("sync.err.left", "This phone is no longer part of the family.")
+        SyncError.Removed -> t("sync.removed", "You were removed from the family. Your loans stay on this phone.")
+        SyncError.NotAdmin -> t("sync.err.notAdmin", "Only a family admin can do that.")
+        SyncError.Stale -> t("sync.err.stale", "The family changed just now. Try again.")
+        SyncError.Limit -> t("sync.err.limit", "The family has reached a limit. Try again later.")
+        SyncError.Refused -> t("sync.err.refused", "That can't be done in this family.")
+        SyncError.InviteGone -> t("sync.err.badCode", "This family code does not work. Ask for a new one.")
+        SyncError.Unverified -> t("sync.err.unverified", "Something from the family could not be checked, so nothing was changed.")
         is SyncError.Server -> t("sync.err.busy", "Sharing is busy right now. Try again later.")
         is SyncError.BadData -> t("sync.err.data", "Something went wrong while sharing. Try again later.")
         SyncError.NotConfigured -> t("sync.err.off", "Sharing is not available in this version of the app.")
@@ -46,13 +53,22 @@ object SyncText {
         SyncResult.NoFamily -> t("sync.noFamily", "You are not sharing with your family yet.")
         SyncResult.AlreadyInFamily -> t("sync.already", "This phone is already in a family.")
         SyncResult.BadInvite -> t("sync.notCode", "This is not a Tally family code.")
+        SyncResult.OldInvite -> oldCode()
+        SyncResult.JoinPending -> t("join.pending", "Asked to join. Someone in your family needs to allow it; this phone joins on its own once they do.")
+        SyncResult.JoinDenied -> t("join.denied", "You were not let into the family.")
+        SyncResult.Removed -> t("sync.removed", "You were removed from the family. Your loans stay on this phone.")
+        SyncResult.OldFamily -> t("sync.oldFamily", "Sharing needs setting up again. Leave the family, then start sharing or join again. Your loans stay on this phone.")
     }
+
+    /** An invite made by 0.1.0/0.2.0. */
+    fun oldCode(): String = t("join.oldCode", "This code is from an older Tally. Ask for a new one.")
 
     /** What the quiet line under the figure says, and whether tapping it does something. */
     class Line(val text: String, val action: Action)
     enum class Action { NONE, SET_UP, RETRY }
 
-    fun status(state: SyncState, hasFamily: Boolean, lastAt: Long, nowMs: Long): Line = when {
+    fun status(state: SyncState, hasFamily: Boolean, lastAt: Long, nowMs: Long, joining: Boolean = false): Line = when {
+        joining && !hasFamily -> Line(t("sync.line.joining", "Waiting to be let into the family"), Action.RETRY)
         !hasFamily -> Line(t("sync.line.none", "Not shared yet"), Action.SET_UP)
         state.running -> Line(t("sync.line.running", "Syncing…"), Action.NONE)
         state.last is SyncResult.Failed -> Line(t("sync.line.failed", "Couldn't sync · tap to retry"), Action.RETRY)

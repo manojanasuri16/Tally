@@ -30,6 +30,7 @@ import com.tally.book.model.DB
 import com.tally.book.model.memberName
 import com.tally.book.model.myId
 import com.tally.book.sync.Invite
+import com.tally.book.sync.InviteResult
 import com.tally.book.sync.Sync
 import com.tally.book.ui.AppNav
 import com.tally.book.ui.ScreenPadding
@@ -126,20 +127,18 @@ private fun InFamily(onInvite: () -> Unit) {
     val state by Sync.engine.state.collectAsStateWithLifecycle()
     val rev = rememberLedger()
     val familyName = remember(rev) { DB.o("family")?.s("name").orEmpty() }
-    val members = remember(rev) {
-        val me = myId()
-        DB.objs("members").filter { !it.b("deleted") }.sortedWith(compareByDescending<Obj> { it.s("id") == me }.thenBy { it.num("at") })
-    }
+    // the relay's list of who is in the family (removed and departed members are not), me first
+    val members = remember(rev) { Sync.membership().members.sortedByDescending { it.me } }
     val lastAt = remember(rev, state) { Sync.lastSyncedAt() }
     val now = Clock.millis()
 
     AGroup(title = familyName, footer = t("family.safe", "Only your family can read what you share.")) {
         members.forEach { m ->
-            val mine = m.s("id") == myId()
-            val joined = m.num("at").toLong().takeIf { it > 0 }?.let { fmtISODate(SyncText.isoDate(it)) }
+            val mine = m.me
+            val joined = m.since.takeIf { it > 0 }?.let { fmtISODate(SyncText.isoDate(it)) }
             item {
                 ARow(
-                    m.s("name").ifBlank { memberName(m.s("id")) },
+                    m.name.ifBlank { memberName(m.id) },
                     sub = joined?.let { t("family.joined", "joined {date}", "date" to it) },
                     value = if (mine) t("family.you", "You") else null,
                     icon = Icons.Rounded.Person, tint = if (mine) Apple.colors.accent else Apple.colors.secondaryLabel,
@@ -171,13 +170,22 @@ private fun InFamily(onInvite: () -> Unit) {
 @Composable
 private fun InviteSheet(onDismiss: () -> Unit) {
     val ctx = LocalContext.current
-    // the invite text exists only here, while the sheet is open
-    val invite = remember { Sync.inviteText() }
+    // a fresh one-time invite is made each time the sheet opens; its text exists only here, while the sheet is open
+    var invite by remember { mutableStateOf<String?>(null) }
+    var problem by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        when (val r = Sync.detached { Sync.engine.newInvite() }) {
+            is InviteResult.Made -> invite = r.text
+            is InviteResult.Failed -> problem = SyncText.message(r.result) ?: t("invite.none", "There is nothing to share yet.")
+        }
+    }
     EditSheet(t("invite.title", "Invite someone"), onDismiss, onSave = null) {
         if (invite == null) {
-            Text(t("invite.none", "There is nothing to share yet."), style = Apple.type.body, color = Apple.colors.secondaryLabel)
+            if (problem == null) CircularProgressIndicator(color = Apple.colors.accent, strokeWidth = 3.dp)
+            else Text(problem!!, style = Apple.type.body, color = Apple.colors.secondaryLabel)
             return@EditSheet
         }
+        val invite = invite!!
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
             QrCode(invite, size = 240.dp)
             Text(
@@ -192,7 +200,7 @@ private fun InviteSheet(onDismiss: () -> Unit) {
                     .onFailure { MainActivity.holdLock = false }
             }, Modifier.fillMaxWidth(), )
             Text(
-                t("invite.warn", "Anyone with this code can join. Share it only with family."),
+                t("invite.warn2", "This code works once, for 24 hours. A family admin still has to allow whoever uses it."),
                 style = Apple.type.callout, color = LocalSemantic.current.warning, textAlign = TextAlign.Center,
             )
         }
@@ -234,13 +242,13 @@ fun JoinScreen() {
             }
             TextInput(
                 code, { code = it; problem = null }, t("join.paste.label", "Or paste the code"),
-                supporting = problem ?: (if (code.isNotBlank() && invite == null) t("scan.notTally", "This isn't a Tally family code") else null),
+                supporting = problem ?: (if (code.isNotBlank() && invite == null) (if (Invite.isOld(code)) SyncText.oldCode() else t("scan.notTally", "This isn't a Tally family code")) else null),
             )
             SecondaryButton(t("join.paste", "Paste"), {
                 val text = clipboard.getText()?.text.orEmpty()
                 when {
                     text.isBlank() -> { haptics.reject(); problem = t("join.paste.empty", "Nothing to paste yet. Copy the code first.") }
-                    Invite.find(text) == null -> { haptics.reject(); code = ""; problem = t("scan.notTally", "This isn't a Tally family code") }
+                    Invite.find(text) == null -> { haptics.reject(); code = ""; problem = if (Invite.isOld(text)) SyncText.oldCode() else t("scan.notTally", "This isn't a Tally family code") }
                     else -> { code = text; problem = null; haptics.tick() }
                 }
             }, Modifier.fillMaxWidth().heightIn(min = 52.dp))
@@ -355,11 +363,13 @@ fun InviteIntake() {
     val scope = rememberCoroutineScope()
     fun take() {
         if (!named) return
+        // the join-request notification: open the Family page (the requests are shown there and on the home card)
+        if (com.tally.book.pendingOpen == "family") { com.tally.book.pendingOpen = null; FamilyFlow.openFamily(); Sync.syncInBackground() }
         val raw = com.tally.book.pendingInvite ?: return
         com.tally.book.pendingInvite = null
         scope.launch {
             val invite = Invite.find(raw)
-            if (invite == null) Dialogs.tell(t("sync.notCode", "This is not a Tally family code.")) else FamilyFlow.join(invite)
+            if (invite == null) Dialogs.tell(if (Invite.isOld(raw)) SyncText.oldCode() else t("sync.notCode", "This is not a Tally family code.")) else FamilyFlow.join(invite)
         }
     }
     LaunchedEffect(named) { take() }

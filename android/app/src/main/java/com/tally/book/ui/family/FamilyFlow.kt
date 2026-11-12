@@ -47,14 +47,20 @@ object FamilyFlow {
      * come from the invite, before anything is saved), then joins. True when this phone is now in the family.
      */
     suspend fun join(invite: Invite): Boolean {
-        if (Sync.hasFamily()) {
+        if (Sync.hasFamily() || Sync.isJoining()) {
             Dialogs.tell(t("join.already", "This phone is already in a family. Leave it first if you want to join another."))
             return false
         }
         val ok = Dialogs.ask(joinQuestion(invite), t("join.ok", "Join"))
         if (!ok) return false
         busy.value = t("join.busy", "Joining…")
-        val result = try { Sync.detached { Sync.engine.joinFamily(invite) } } finally { busy.value = null }
+        val result = try { Sync.detached { Sync.engine.requestJoin(invite) } } finally { busy.value = null }
+        // the request is with the family now; an admin lets this phone in (the next sync enters the family)
+        if (result == SyncResult.JoinPending) {
+            AppNav.home()
+            Dialogs.tell(SyncText.message(result)!!)
+            return true
+        }
         return finish(result, joining = true)
     }
 

@@ -13,7 +13,8 @@ import java.net.URL
 /**
  * Opt-in check against the deployed relay: runs only with TALLY_LIVE=1. The URL and publishable key come from the
  * environment (TALLY_SUPABASE_URL / TALLY_SUPABASE_ANON_KEY) or ~/.gradle/gradle.properties. What it saw is written
- * to app/build/tally-live-check.txt (no secrets), including the throwaway family ids it created.
+ * to app/build/tally-live-check.txt (no secrets). Every family it makes is deleted at the end by its members leaving
+ * (the relay deletes a family when its last member leaves); any id it could not clean up is listed there.
  */
 class SyncLiveTest {
     private val log = StringBuilder()
@@ -40,92 +41,158 @@ class SyncLiveTest {
         val url = prop("TALLY_SUPABASE_URL"); val key = prop("TALLY_SUPABASE_ANON_KEY")
         assumeTrue(url.isNotBlank() && key.isNotBlank())
         val relay = HttpRelay(url, key)
-        try { runBlocking { check(relay, url, key) } } finally {
+        val cleanup = ArrayList<Cred>()
+        try { runBlocking { check(relay, url, key, cleanup) } } finally {
+            runBlocking {
+                for (c in cleanup) {
+                    val r = relay.leave(c)
+                    if (r !is RelayResult.Ok && r != RelayResult.Err(SyncError.Unauthorised) && r != RelayResult.Err(SyncError.Removed)) note("cleanup ${c.familyId} ${c.memberId} -> $r (NOT cleaned)")
+                    else note("cleanup ${c.familyId} ${c.memberId} -> $r")
+                }
+            }
             File("build/tally-live-check.txt").apply { parentFile?.mkdirs() }.writeText(log.toString())
         }
     }
 
-    private suspend fun check(relay: HttpRelay, url: String, key: String) {
+    private suspend fun check(relay: HttpRelay, url: String, key: String, cleanup: MutableList<Cred>) {
+        // ---- the relay alone
         val fam = Invite.newFamilyId()
-        val famKey = Invite.newKey()
-        val token = SyncCrypto.authToken(famKey)
+        val secret = Membership.newCredential(); val notice = Membership.newCredential()
+        val me = Cred(fam, "m-live-a", secret)
         note("throwaway family: $fam")
-
-        val created = relay.createFamily(fam, SyncCrypto.tokenHash(token)); note("create -> $created")
+        val created = relay.createFamily(fam, me.memberId, SyncCrypto.tokenHash(secret), SyncCrypto.tokenHash(notice)); note("create -> $created")
         assertEquals(RelayResult.Ok(Unit), created)
-        val again = relay.createFamily(fam, SyncCrypto.tokenHash(token)); note("create again, same hash -> $again")
-        assertEquals(RelayResult.Ok(Unit), again)
-        val hijack = relay.createFamily(fam, SyncCrypto.tokenHash("attacker")); note("create again, other hash -> $hijack")
+        cleanup.add(me)
+        assertEquals(RelayResult.Ok(Unit), relay.createFamily(fam, me.memberId, SyncCrypto.tokenHash(secret), null).also { note("create again, same creds -> $it") })
+        val hijack = relay.createFamily(fam, "m-evil", SyncCrypto.tokenHash("attacker"), null); note("create again, other member -> $hijack")
         assertEquals(RelayResult.Err(SyncError.Unauthorised), hijack)
 
-        val enc = SyncCrypto.encKey(famKey)
-        val rows = listOf("r1", "r2", "r3").map { RelayRow(it, "payment", SyncCrypto.sealRecord(enc, fam, it, """{"k":"payment","r":{"id":"$it"}}""")) }
-        val pushed = relay.push(fam, token, rows); note("push 3 -> $pushed")
-        assertEquals(RelayResult.Ok(3), pushed)
-        val all = (relay.pull(fam, token, 0, 500) as RelayResult.Ok).value
+        val st = (relay.state(me, 0) as RelayResult.Ok).value
+        note("state -> epoch ${st.epoch}, role ${st.myRole}, creator ${st.creator}, members ${st.members.map { it.id to it.role }}")
+        assertEquals(1, st.epoch); assertEquals("admin", st.myRole)
+
+        val enc = SyncCrypto.encKey(SyncCrypto.randomBytes(32))
+        val rows = listOf("r1", "r2", "r3").map { RelayRow(it, "payment", SyncCrypto.sealE(enc, 1, """{"k":"payment","r":{"id":"$it"}}""".toByteArray(), SyncCrypto.recordAad(fam, it))) }
+        assertEquals(RelayResult.Ok(3), relay.push(me, 1, rows).also { note("push 3 at epoch 1 -> $it") })
+        val stale = relay.push(me, 2, rows); note("push at epoch 2 (not the family's) -> $stale")
+        assertEquals(RelayResult.Err(SyncError.Stale), stale)
+        val all = (relay.pull(me, 0, 500) as RelayResult.Ok).value
         note("pull since 0 -> ${all.map { it.id to it.seq }}")
         assertEquals(listOf("r1", "r2", "r3"), all.map { it.id }.sorted())
         assertEquals(all.map { it.seq }.sorted(), all.map { it.seq })
-        assertEquals("""{"k":"payment","r":{"id":"r2"}}""", SyncCrypto.openRecord(enc, fam, "r2", all.first { it.id == "r2" }.blob))
-        val page = (relay.pull(fam, token, all[0].seq, 1) as RelayResult.Ok).value
-        note("pull since ${all[0].seq} max 1 -> ${page.map { it.id to it.seq }}")
-        assertEquals(listOf(all[1].id), page.map { it.id })
-        // an upsert takes a new, higher seq
-        relay.push(fam, token, listOf(rows[0]))
-        val after = (relay.pull(fam, token, all.last().seq, 10) as RelayResult.Ok).value
-        note("re-push r1, pull since ${all.last().seq} -> ${after.map { it.id to it.seq }}")
-        assertEquals(listOf("r1"), after.map { it.id })
-
-        val wrongTok = SyncCrypto.authToken(Invite.newKey())
-        note("pull, wrong token -> ${relay.pull(fam, wrongTok, 0, 10)}")
-        assertEquals(RelayResult.Err(SyncError.Unauthorised), relay.pull(fam, wrongTok, 0, 10))
-        assertEquals(RelayResult.Err(SyncError.Unauthorised), relay.push(fam, wrongTok, rows))
-        assertEquals(RelayResult.Err(SyncError.Unauthorised), relay.blobGet(fam, wrongTok, "b1"))
-        note("pull, unknown family -> ${relay.pull(Invite.newFamilyId(), token, 0, 10)}")
-        assertEquals(RelayResult.Err(SyncError.Unauthorised), relay.pull(Invite.newFamilyId(), token, 0, 10))
-
-        val badKind = relay.push(fam, token, listOf(RelayRow("r9", "evil", "x"))); note("push bad kind -> $badKind")
+        val wrong = Cred(fam, me.memberId, Membership.newCredential())
+        note("pull, wrong secret -> ${relay.pull(wrong, 0, 10)}")
+        assertEquals(RelayResult.Err(SyncError.Unauthorised), relay.pull(wrong, 0, 10))
+        assertEquals(RelayResult.Err(SyncError.Unauthorised), relay.pull(Cred(Invite.newFamilyId(), me.memberId, secret), 0, 10))
+        val badKind = relay.push(me, 1, listOf(RelayRow("r9", "evil", "x"))); note("push bad kind -> $badKind")
         assertTrue(badKind is RelayResult.Err && badKind.error is SyncError.BadData)
-        val badId = relay.push(fam, token, listOf(RelayRow("../x", "loan", "x"))); note("push bad id -> $badId")
-        assertTrue(badId is RelayResult.Err && badId.error is SyncError.BadData)
-        val big = relay.push(fam, token, listOf(RelayRow("r9", "loan", "A".repeat(70_000)))); note("push 70k blob -> $big")
+        val big = relay.push(me, 1, listOf(RelayRow("r9", "loan", "A".repeat(70_000)))); note("push 70k blob -> $big")
         assertTrue(big is RelayResult.Err && big.error is SyncError.BadData)
+        val data = SyncCrypto.sealE(enc, 1, ByteArray(1000) { it.toByte() }, SyncCrypto.fileAad(fam, "b1"))
+        note("blob put -> ${relay.blobPut(me, 1, "b1", data)}")
+        assertEquals(RelayResult.Ok(data), relay.blobGet(me, "b1"))
+        assertEquals(RelayResult.Ok(null), relay.blobGet(me, "nope"))
 
-        val data = SyncCrypto.sealFile(enc, fam, "b1", ByteArray(1000) { it.toByte() })
-        note("blob put -> ${relay.blobPut(fam, token, "b1", data)}")
-        val got = relay.blobGet(fam, token, "b1")
-        assertEquals(RelayResult.Ok(data), got)
-        note("blob get -> ok, ${data.length} chars back")
-        assertEquals(RelayResult.Ok(null), relay.blobGet(fam, token, "nope"))
+        // an unknown invite, and a request without one
+        val noInvite = relay.joinRequest(fam, Invite.idOf(Invite.newSecret()), "m-x", SyncCrypto.tokenHash("x"), null, "blob"); note("join request, unknown invite -> $noInvite")
+        assertEquals(RelayResult.Err(SyncError.InviteGone), noInvite)
 
-        // the anon key reaches no table directly
-        for (t in listOf("tally_records", "tally_families", "tally_blobs")) {
+        // ---- the anon key reaches no table directly, and no private helper
+        for (t in listOf("tally_family", "tally_member", "tally_invite", "tally_request", "tally_box", "tally_record", "tally_blob",
+                         "tally_families", "tally_records", "tally_blobs")) {
             val (code, text) = raw("GET", "$url/rest/v1/$t?select=*", key)
             note("GET /rest/v1/$t -> $code $text")
-            assertTrue(code == 401 || code == 403 || text.trim() == "[]")
+            assertTrue(code == 401 || code == 403 || code == 404 || text.trim() == "[]")
         }
-        val (icode, itext) = raw("POST", "$url/rest/v1/tally_records", key, """{"family_id":"$fam","id":"x","kind":"loan","blob":"x","seq":1}""")
-        note("POST /rest/v1/tally_records -> $icode $itext")
-        assertTrue(icode == 401 || icode == 403)
-        val (acode, atext) = raw("POST", "$url/rest/v1/rpc/tally_auth", key, """{"p_family":"$fam","p_token":"$token"}""")
-        note("POST /rest/v1/rpc/tally_auth (private helper) -> $acode $atext")
-        assertTrue(acode >= 400)
+        val (icode, itext) = raw("POST", "$url/rest/v1/tally_member", key, """{"family_id":"$fam","id":"m-evil","secret_hash":"${"0".repeat(64)}","role":"admin"}""")
+        note("POST /rest/v1/tally_member -> $icode $itext")
+        assertTrue(icode == 401 || icode == 403 || icode == 404)
+        for (fn in listOf("tally_member_auth", "tally_admin_auth", "tally_put_boxes", "tally_new_epoch")) {
+            val (acode, atext) = raw("POST", "$url/rest/v1/rpc/$fn", key, """{"p_family":"$fam","p_member":"m-live-a","p_secret":"$secret"}""")
+            note("POST /rest/v1/rpc/$fn (private helper) -> $acode ${atext.take(120)}")
+            assertTrue(acode >= 400)
+        }
+        val (ocode, otext) = raw("POST", "$url/rest/v1/rpc/tally_pull", key, """{"family_id":"$fam","token":"x","since":0,"max":1}""")
+        note("POST /rest/v1/rpc/tally_pull with the version-1 arguments -> $ocode ${otext.take(120)}")
+        assertTrue(ocode >= 400)
         val (pcode, ptext) = raw("POST", "$url/rest/v1/rpc/tally_ping", key, "{}")
         note("POST /rest/v1/rpc/tally_ping -> $pcode $ptext")
         assertEquals(200, pcode)
 
-        // two phones through the real relay
+        // ---- phones through the real relay
         TestClock.start()
         try {
-            val a = Phone("A", relay); val b = Phone("B", relay)
+            val a = Phone("A", relay); val b = Phone("B", relay); val c = Phone("C", relay)
             a.loan("l1", "Live loan"); a.payment("p1", "l1", 1234); a.file("f1", "loan", "l1", byteArrayOf(5, 6, 7))
             val ra = a.engine.createFamily("Live test"); note("engine create -> $ra")
-            note("engine family: ${a.db.o("family").s("id")}")
-            val rb = b.engine.joinFamily(a.engine.inviteText(a.db)!!); note("engine join -> $rb")
-            b.payment("p2", "l1", 99)
-            note("engine B sync -> ${b.engine.sync()}"); note("engine A sync -> ${a.engine.sync()}")
-            assertEquals(a.shared(), b.shared())
+            val fa = a.db.o("family").s("id")
+            note("engine family: $fa")
+            val credA = Cred(fa, a.me, a.db.o("family").o("me").s("secret"))
+            cleanup.add(credA)
+            val inviteText = a.invite()
+            note("B request -> ${b.engine.requestJoin(inviteText)}")
+            val n = a.notices.cred!!
+            note("pending (notice credential) -> ${relay.pending(n.familyId, n.memberId, n.notice)}")
+            assertEquals(RelayResult.Ok(1), relay.pending(n.familyId, n.memberId, n.notice))
+            note("C request with the same (used) invite -> ${c.engine.requestJoin(inviteText)}")
+            note("A sync -> ${a.sync()}; requests: ${a.engine.requests.value.map { it.name + " invited by " + it.invitedBy }}")
+            note("A approve B -> ${a.engine.approve(a.engine.requests.value.single().id)}")
+            note("B sync -> ${b.sync()}")
+            val credB = Cred(fa, b.me, b.db.o("family").o("me").s("secret"))
+            cleanup.add(credB)
+            note("C join -> ${c.joinVia(a)}")
+            val credC = Cred(fa, c.me, c.db.o("family").o("me").s("secret"))
+            cleanup.add(credC)
             assertArrayEquals(byteArrayOf(5, 6, 7), b.files.bytes["f1"])
+
+            // role checks on the relay itself
+            val (rc, rt) = raw("POST", "$url/rest/v1/rpc/tally_member_role", key,
+                """{"p_family":"$fa","p_member":"${b.me}","p_secret":"${credB.secret}","p_target":"${b.me}","p_admin":true}""")
+            note("member B tally_member_role, raw -> $rc ${rt.take(160)}")
+            val asMember = listOf(
+                "setRole" to relay.setRole(credB, b.me, true),
+                "remove" to relay.remove(credB, a.me, 2, listOf(BoxFor(b.me, "x"))),
+                "rotate" to relay.rotate(credB, 2, listOf(BoxFor(b.me, "x"))),
+                "decide" to relay.decide(credB, Invite.idOf(Invite.newSecret()), true, 1, "x"),
+                "boxPut" to relay.boxPut(credB, 1, listOf(BoxFor(c.me, "x"))),
+            )
+            asMember.forEach { (what, r) -> note("member B $what -> $r"); assertEquals(RelayResult.Err(SyncError.NotAdmin), r) }
+            note("pending for member B -> ${relay.pending(fa, b.me, b.db.o("family").o("me").s("notice"))}")
+
+            note("A makes B admin -> ${a.engine.setAdmin(b.me, true)}")
+            val creatorRemove = relay.remove(credB, a.me, 2, listOf(BoxFor(b.me, "x"))); note("admin B removes the creator -> $creatorRemove")
+            assertEquals(RelayResult.Err(SyncError.Refused), creatorRemove)
+            val selfRemove = relay.remove(credA, a.me, 2, listOf(BoxFor(a.me, "x"))); note("A removes itself -> $selfRemove")
+            assertEquals(RelayResult.Err(SyncError.Refused), selfRemove)
+            val boxToRemoved = relay.remove(credA, c.me, 2, listOf(BoxFor(a.me, "x"), BoxFor(c.me, "x"))); note("remove C with a box for C -> $boxToRemoved")
+            assertEquals(RelayResult.Err(SyncError.Stale), boxToRemoved)
+
+            note("A removes C -> ${a.engine.removeMember(c.me)}")
+            note("C pull after removal -> ${relay.pull(credC, 0, 1)}")
+            assertEquals(RelayResult.Err(SyncError.Removed), relay.pull(credC, 0, 1))
+            assertEquals(RelayResult.Err(SyncError.Removed), relay.push(credC, 2, emptyList()))
+            note("C sync -> ${c.sync()}; C family: ${c.db["family"]}; gone: ${c.view.gone}")
+            assertNull(c.db["family"])
+            cleanup.remove(credC)
+            note("B sync -> ${b.sync()}; B epochs: ${b.db.o("family").o("keys")!!.keys}")
+            assertEquals(setOf("1", "2"), b.db.o("family").o("keys")!!.keys)
+            b.payment("p2", "l1", 99)
+            note("B sync -> ${b.sync()}; A sync -> ${a.sync()}")
+            assertEquals(a.shared(), b.shared())
+            assertEquals(RelayResult.Err(SyncError.Stale), relay.push(credA, 1, emptyList()).also { note("push at the old epoch -> $it") })
+
+            // the creator (sole original admin) leaves; B is already admin. B then leaves: nobody left -> the family is deleted
+            note("B steps down while A is admin -> ${relay.setRole(credB, b.me, false)}")
+            note("A leaves -> ${a.engine.leaveFamily()}")
+            cleanup.remove(credA)
+            val stB = (relay.state(credB, 0) as RelayResult.Ok).value
+            note("after A left: B role ${stB.myRole}, creator ${stB.creator}, rotate ${stB.rotate}")
+            assertEquals("admin", stB.myRole)
+            note("B sync (rotates) -> ${b.sync()}; epoch now ${(relay.state(credB, 0) as RelayResult.Ok).value.epoch}")
+            val leftB = relay.leave(credB); note("B leaves (last member) -> $leftB")
+            assertEquals(RelayResult.Ok("deleted"), leftB)
+            cleanup.remove(credB)
+            assertEquals(RelayResult.Err(SyncError.Unauthorised), relay.state(credB, 0))
         } finally { TestClock.stop() }
     }
 }
