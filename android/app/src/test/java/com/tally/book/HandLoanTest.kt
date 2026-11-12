@@ -40,13 +40,15 @@ class HandLoanTest {
         assertEquals(0.0, v(l, "2026-11-13").num("owed"), 0.0); assertEquals("", v(l, "2026-11-13").s("nextDueDate"))
     }
 
-    // 2,00,000 at 2% = 4,000 a month. Return 50,000: 1,50,000 left, 2% = 3,000 a month.
+    // 2,00,000 at 2% = 4,000 a month. Return 50,000 on 1 Nov: 1,50,000 left, 2% = 3,000 a month from then on. The periods that
+    // ended 10 Oct and 10 Nov both started on the full 2,00,000 (interest is on what was owed at the start of each period), so 8,000 is pending.
     @Test fun partRepaymentLowersTheInterest() {
         val l = hand("Other", 200000.0, 2.0)
         assertEquals(4000.0, v(l).num("nextDueAmount"), 0.0)
         pay(l, "2026-11-01", 50000.0, "principal")
         val w = v(l)
-        assertEquals(150000.0, w.num("owed"), 0.0); assertEquals(3000.0, w.num("nextDueAmount"), 0.0)
+        assertEquals(150000.0, w.num("owed"), 0.0); assertEquals(3000.0, w.num("periodInterest"), 0.0)
+        assertEquals(8000.0, w.num("interestPending"), 0.0); assertEquals(2.0, w.num("periodsPending"), 0.0)
         assertEquals(3000.0, suggestPayment(loan(l.s("id"))!!, today).num("amount"), 0.0)
     }
 

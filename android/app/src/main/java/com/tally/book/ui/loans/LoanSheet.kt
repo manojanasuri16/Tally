@@ -43,7 +43,7 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
     var rate by remember { mutableStateOf(existing?.let { editText(it.num("rate")) }.orEmpty()) }
     var rateUnit by remember { mutableStateOf(existing?.s("rateUnit")?.takeIf { it == "month" } ?: "year") }
     var emi by remember { mutableDoubleStateOf(existing?.num("emi") ?: 0.0) }
-    var tenure by remember { mutableStateOf(existing?.let { editText(it.num("tenureMonths")) }.orEmpty()) }
+    var tenure by remember { mutableStateOf(existing?.let { editText(it.num("tenure")) }.orEmpty()) }
     var dueDay by remember { mutableStateOf(existing?.let { editText(it.num("dueDay")) } ?: today.dayOfMonth.toString()) }
     var dueDayTouched by remember { mutableStateOf(editing) }
     var interest by remember { mutableStateOf(existing?.takeIf { it.s("kind") == "hand" }?.let { interestChoice(it.num("rate"), it.s("rateUnit")) } ?: "month") }
@@ -75,7 +75,7 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
         d["private"] = keepPrivate
         if (kind == "bank") {
             d["emi"] = emi
-            d["tenureMonths"] = n(tenure)
+            d["tenure"] = n(tenure)
             d["dueDay"] = n(dueDay)
         } else {
             d["rateUnit"] = if (kind == "hand") (if (interest == "month") "month" else "year") else rateUnit

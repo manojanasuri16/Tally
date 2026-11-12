@@ -172,6 +172,47 @@ fun reopenLoan(id: String) {
     l["closed"] = false; l["closedDate"] = ""; touch(l)
 }
 
+/**
+ * Records a new interest rate for a bank loan from [from] (floating rates). With [emi] the bank changed the instalment from that date;
+ * without it the instalment stays and the number of instalments left follows. A second change on the same date replaces the first.
+ * Returns the problem in plain words (nothing is changed), or null when it was saved.
+ */
+fun addRateChange(loanId: String, from: String, rate: Double, emi: Double? = null): String? {
+    val l = loan(loanId) ?: return t("pay.err.loan", "This loan could not be found.")
+    validateRateChange(l, from, rate, emi)?.let { return it }
+    val list = l.aa("rateChanges")
+    list.removeAll { it.asObj()?.s("from") == from.take(10) }
+    val rec = obj("id" to uid("rc"), "from" to from.take(10), "rate" to rate)
+    if (emi != null) rec["emi"] = emi
+    list.add(rec)
+    list.sortBy { it.asObj()?.s("from") }
+    touch(l)
+    return null
+}
+
+/** Removes one rate change (by its id) from a loan. False when there was none. */
+fun removeRateChange(loanId: String, changeId: String): Boolean {
+    val l = loan(loanId) ?: return false
+    val removed = l.aa("rateChanges").removeAll { it.asObj()?.s("id") == changeId }
+    if (removed) touch(l)
+    return removed
+}
+
+/**
+ * Renews a gold or hand loan on [date] until [newRepayBy]: the old and new dates go into the loan's `renewals` history
+ * ({ id, date, from, to, by, at }) and `repayBy` moves, so the principal item leaves the due list. Interest is not touched: whatever
+ * interest is pending stays pending (pay it as an interest payment). Returns the problem in plain words, or null when it was saved.
+ */
+fun renewLoan(id: String, newRepayBy: String, date: String): String? {
+    val l = loan(id) ?: return t("pay.err.loan", "This loan could not be found.")
+    validateRenewal(l, newRepayBy, date)?.let { return it }
+    l.aa("renewals").add(obj("id" to uid("rn"), "date" to date.take(10), "from" to l.s("repayBy"), "to" to newRepayBy.take(10),
+        "by" to myId(), "at" to Clock.millis().toDouble()))
+    l["repayBy"] = newRepayBy.take(10)
+    touch(l)
+    return null
+}
+
 /** Flips the private flag and touches the loan, all its payments and all its files, so sync sees every one of them. */
 fun setLoanPrivate(id: String, private: Boolean) {
     val l = loan(id) ?: return

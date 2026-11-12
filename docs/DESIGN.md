@@ -10,9 +10,9 @@ It is a sibling of Balance (`~/Balance/android`, package `com.balance.ledger`) a
 ## What it does
 
 - Three kinds of loan:
-  - `bank`: principal, yearly rate, tenure in months, monthly EMI, due day.
+  - `bank`: an instalment loan: principal, yearly rate, number of instalments, instalment (EMI), and how often it falls (every month, two weeks, week or day). Interest on what is still owed (reducing) or flat. A floating rate can change from a date.
   - `hand`: money borrowed from a person (or, with `direction: "given"`, money lent to one). Only interest is paid (monthly or yearly), or none at all; the principal stays owed until it is returned, all at once or in parts.
-  - `gold`: a gold loan. Interest is paid once a year; principal is repaid on closure.
+  - `gold`: a **loan against something** (`pledge`: gold, an LIC policy, a fixed deposit, land papers, or nothing, as for a crop loan or Kisan credit card). Interest only (yearly by default), principal repaid on closure, with an optional date to repay or renew by.
 - Log a payment against a loan: amount, date, what it was for (EMI, interest, principal), and optionally a note, a pasted bank SMS, and photos or documents.
 - Keep each loan's documents, added when the loan is made or later on its screen.
 - Family sync: pull down to refresh. Every loan and payment shows who entered it. Admins let people in (one-time invites, approved by an admin), can remove members (the family's key is then replaced), and make others admins.
@@ -32,12 +32,22 @@ DB = {
   joining: { fam, name, inviter, invite, s, me, at, expires } | absent,  // a join request waiting for an admin
   familyGone: { name, why, at } | absent,       // "removed" | "denied" | "expired": told once on screen
   members: [ { id, name, pub, invite?, left?, at, updatedAt, updatedBy, deleted? } ],
-  loans:   [ { id, kind, name, lender, principal, rate, startDate, tenureMonths, emi, dueDay,
+  loans:   [ { id, kind, name, lender, principal, rate, startDate, note, private, closed, closedDate,
+               interestMethod,                  // "reducing" (default: interest on what is still owed) | "flat" (on the original amount); every kind with interest
+               // bank only:
+               tenure,                          // number of instalments (in the loan's frequency); 0 = work it out from emi
+               emi,                             // the instalment; 0 = work it out from tenure (whole rupees)
+               frequency,                       // "month" (default) | "fortnight" | "week" | "day"
+               dueDay,                          // day of the month the instalment falls; monthly loans only
+               rateChanges: [ { id, from, rate, emi? } ],   // floating rate: from that date the rate (and, with emi, the instalment) changes; reducing loans only
+               // hand and gold:
                interestEvery,                   // "month" | "year" (hand: default month; gold: default year)
-               rateUnit,                        // "year" (default: percent a year) | "month" (percent a month; "2 rupees interest" = 2) (hand, gold)
+               rateUnit,                        // "year" (default: percent a year) | "month" (percent a month; "2 rupees interest" = 2)
+               repayBy,                         // optional ISO date, after startDate: "to be returned by" (hand) / "repay or renew by" (gold)
+               renewals: [ { id, date, from, to, by, at } ],  // renewLoan history: the repayBy moved from `from` to `to` on `date`
                direction,                       // hand only: absent/"taken" (money I took) | "given" (money I gave); never changed after the loan is made
-               repayBy,                         // hand only, optional ISO date: "to be returned by"
-               grams, note, private, closed, closedDate,
+               pledge,                          // gold only: "gold" (default) | "lic" | "fd" | "land" | "none"
+               grams,                           // gold only, and only when pledge is "gold"
                by, at, updatedAt, updatedBy, deleted? } ],
   payments:[ { id, loanId, date, amount, kind,  // kind: "emi" | "interest" | "principal"
                note, sms, by, at, updatedAt, updatedBy, deleted? } ],
@@ -48,13 +58,44 @@ DB = {
 }
 ```
 
-- A `hand` loan with `rate: 0` has no interest: no next due, never overdue, simply still owed. `repayBy` puts the remaining amount in the due list as a principal row from the month it falls in (overdue once passed while anything is owed), separate from the interest row. Part repayments (`principal` payments) lower what interest is worked on.
-- Money never nets out. For taken loans `totals()` gives `owed`, `dueThisMonth`, `paidThisMonth`, `byKind`; for given loans `toReceive`, `expectedThisMonth`, `receivedThisMonth`. `dueList()` rows carry `given` and `kind` (`emi`/`interest`/`principal`). On screen a given loan reads "Still to come back", "Log money received", "Expected this month", "Received".
+- Money never nets out. For taken loans `totals()` gives `owed`, `dueThisMonth`, `paidThisMonth`, `byKind`, `pendingThisMonth`; for given loans `toReceive`, `expectedThisMonth`, `receivedThisMonth`, `pendingToReceive`. `dueList()` rows carry `given` and `kind` (`emi`/`interest`/`principal`). On screen a given loan reads "Still to come back", "Log money received", "Expected this month", "Received".
+- The loan rules are below ("Loan rules"); the code is `model/LoanMath.kt` (arithmetic), `model/Loans.kt` (view, due list, totals, checks), `model/LoanLabels.kt` (labels and wording), `model/Reminders.kt`, and the writes in `model/Records.kt`.
 - `by` / `updatedBy` are member ids; `at` / `updatedAt` are epoch milliseconds from `Clock.millis()`.
 - Dates are ISO `YYYY-MM-DD`, device-local.
 - Deleting sets `deleted: true` (a tombstone) so the delete can travel. Tombstones are hidden everywhere in the UI.
 - Every write helper in the model stamps `updatedAt`/`updatedBy` and marks the id in `sync.dirty`. Screens never do this by hand.
 - A payment or file is private exactly when its loan is private (`isPrivate(record)` resolves through the owner).
+
+## Loan rules
+
+All figures come from the payments actually logged; nothing is added to what is owed. Amounts are rupees (`Double`); an EMI and a period's interest are whole rupees, everything else is kept exact and rounded only on screen.
+
+**What is owed** is the principal still outstanding. Interest or instalments that fell due and were not paid are **pending**: shown beside it, never added to it.
+
+### Instalment loans (`bank`)
+
+- **Instalments** fall every month (on `dueDay`, clamped to the month's last day; the first is the first due day after the start date), or every 14, 7 or 1 days from the start date (so a weekly or fortnightly loan keeps the start date's weekday; `dueDay` is ignored). `tenure` is the number of instalments. The periodic rate is the yearly rate / 12, 26, 52 or 365.
+- **Reducing** (default): EMI = P·r·(1+r)^n / ((1+r)^n − 1), to the whole rupee. Each instalment's interest is what is owed × r at the rate in force on its due date; the rest of it is principal.
+- **Flat**: total interest = P × yearly rate × (n / instalments a year); instalment = (P + total interest) / n, to the whole rupee. Every instalment carries the same interest part, P × yearly rate / instalments a year; the rest is principal.
+- With only an EMI given, the number of instalments is worked out from it; with only a count, the EMI. The **last agreed instalment** takes the few rupees left over from rounding the EMI (when what is left differs from the EMI by at most n + 1 rupees), so a 12-instalment loan has exactly 12.
+- **EMI payments cover instalments in order, oldest first.** A partial payment covers part of one (what is left on it is the next amount due); a double payment covers two. An instalment's interest is charged once, however many payments it takes. `principal` payments (part-payments) lower what is owed at once. `interest` payments on a bank loan are only counted as interest paid.
+- **Part-payments:** reducing: the instalment stays, fewer are needed. Flat: the instalment and its interest part stay the same, fewer are needed, and the instalments no longer needed (with their interest) are simply not charged: instalments left = what is owed / principal part, rounded up, and the last is what is left plus its interest.
+- **Rate changes** (`rateChanges`, reducing loans only): every instalment due on or after `from` uses the new rate for its interest; with `emi` it also uses the new instalment. Without `emi` the instalment stays and the number left follows. Instalments due before `from` are never recomputed. Two changes on one date are not allowed (`addRateChange` replaces one on the same date).
+- **Pending:** instalments whose date is before today and that are not fully covered (`emisPending`, `amountPending`). The instalments left, the end date, and the amounts of the ones not paid yet are worked forward from what is owed now. An EMI too small to ever clear the loan sets `emiTooLow` (and validation refuses one at or below the first instalment's interest).
+
+### Interest-only loans (`hand` with a rate, `gold`)
+
+- **Periods** end every month or every year after the start date, on the start date's day (clamped).
+- **Reducing** (default): a period's interest is worked on what was owed at its start (part repayments dated on or before that day count), so a part repayment lowers the interest from the next period. **Flat:** every period's interest is on the original amount until the loan is closed.
+- **Interest payments cover periods in order, oldest first;** a partial payment covers part of one. **Pending** (`interestPending`, `periodsPending`): the uncovered part of every period that ended before today, since the start or since the last period fully paid. Interest is counted only for whole periods that ended while something was still owed: when the whole amount is returned mid-period, that last part-period is not worked out (settle it by hand as an interest payment).
+- A loan with `rate: 0` (hand or gold) has no interest: no next due, never pending, never overdue, simply still owed.
+- **Repay by** (`repayBy`, hand and gold): from the month it falls in, the remaining amount is a principal row in the due list, overdue once the date has passed while anything is owed. **Renewing** (`renewLoan`) moves the date and keeps a `renewals` entry; it does not touch interest: whatever interest is pending stays pending until it is paid as an interest payment.
+
+### Due list, totals, suggestion, reminders
+
+- A loan's instalment/interest row in `dueList()` is everything unpaid dated up to the end of this month (every weekly or daily instalment of the month), dated by the oldest one, split into `pending` (before today) and `upcoming`, with `count`. `totals().dueThisMonth` is the sum of the rows for money I took (so it includes what is pending; `pendingThisMonth` is that part).
+- `suggestPayment()`: a bank loan, what is still to pay on the oldest unpaid instalment; hand and gold, one period's interest on what is owed now (pending interest is shown separately and the person decides); a no-interest loan, a part repayment of 0.
+- `remindersFor(today, horizonDays 0..3)`: for every open loan on this phone, one overdue item (everything pending), one item for today, one per day within the horizon, and the repay-by date as a principal item; counted separately for money I took and money I gave (expected back). A reminder notification built on it names no loan, person or amount.
 
 ## Sync
 
@@ -220,12 +261,12 @@ Follows Balance's `android/UI.md` kit, simplified, plus the apple-design rules (
 - **Welcome:** "What is your name?" → the book. Below it, a quiet "I have a backup" link: pick the file → its PIN if it is locked → one question → the book is back.
 - **Loans (home):** total still owed, then "Due this month" (each row has a single Pay button), then the loans grouped by kind. One add button. Pull down to sync; a small line says when it last synced.
 - **Loan:** what is owed, next due date and amount, payments (newest first, each with who logged it), documents, Edit, Close loan.
-- **Add / edit loan (sheet):** kind first as three big choices; then only that kind's fields. "Keep private" toggle, off by default.
+- **Add / edit loan (sheet):** kind first as big choices; then only that kind's fields. "Keep private" toggle, off by default.
 - **Log payment (sheet):** amount (pre-filled with the EMI or interest due), date (today), kind, then optional: note, paste bank message, add photo, add document.
 - **Family:** `ui/family/`. One of these at the top, by state (`FamilyScreen`): nothing yet (a short explanation, "Start sharing" which asks "Give your family a name", and "Join my family"); **waiting** ("Waiting for an admin to let you in", who invited you, "Check now" and "Cancel request"); **told once** that you were removed ("You were removed from <family>. Your loans are still on this phone."), not let in, or that the request ran out, with OK (`clearGone()`) and then the nothing-yet state; **an old family** (0.1.0/0.2.0: "Sharing needs to be set up again after this update. Your loans stay on this phone.", "Set up sharing" and "Join my family", both of which forget the dead family first); or **in a family**. In a family: the **members** (name, "You", an "Admin" label, "Created the family" under the creator, "joined <date>"). An admin taps a member (not themselves, not the creator) for a small sheet: "Make admin" or "Remove as admin", and "Remove from family" (asks: "<name> will stop seeing new loans and payments. What is already on their phone stays there."); a member who is not an admin sees the list with no actions (`MemberText.actions`). **Invite someone** (any member): a sheet with a fresh QR from `newInvite()`, "Valid for 24 hours, for one person", Share, the warning "Anyone with this code can ask to join. An admin must allow them.", and below "Open invites" (the maker's own, or all for an admin) with Cancel invite per row; the first invite an admin makes also asks, once ever, whether to be told when someone asks to join (a plain question first; Android 13+ then shows its own permission question; a no is final). **Sync now** with the last-synced time, and **Leave family** (asks; as the only admin it names who becomes admin; as the last member it says the family will be deleted). Below, always: My name, Language (English, Telugu, Hindi), App lock (turn on, change, turn off, through `LockFlow`), Backup (below), Hide amounts, and the version. For an admin, **join request cards** ("<name> wants to join <family>. <inviter> invited them." with Allow and Don't allow, which asks once) stack at the very top, also on the home screen (`JoinRequestCards`, hooked in as `joinRequestsCard`), whatever the state of the loans; Allow answers with a short snack.
 - **Join (`family/join`):** "Scan the code" (a full-screen CameraX scanner, `family/scan`, ZXing decoding on a background thread; the camera permission is asked there, with "Paste the code instead" if it is refused) or a Paste button and field (the whole shared message may be pasted: `Invite.find` picks the link out of it). A valid invite always goes through "<Inviter> is inviting you to <family name>. Join?" (or "Join <family name>?" when the invite does not say who sent it; both names come from the invite) before anything is saved; Join sends the request and lands on the Family page, which now says "Waiting for an admin to let you in"; the phone enters the family on a later sync once an admin allows it. A code from 0.1.0/0.2.0 says "This code is from an older Tally. Ask for a new one." An invite link that opens the app (`pendingInvite`) is taken after unlock and the welcome name, with the same question; if the phone is already in a family it says so and does nothing.
 - **Home:** pull down runs one sync and speaks only if it failed (one plain sentence) or if there is no family yet (offering "Set up"). The quiet line under the figure reads "Shared with family · synced 5 min ago", "Syncing…", "Not shared yet" (tap: Family), "Waiting for an admin to let you in" (tap: check), "Sharing needs to be set up again after this update. Your loans stay on this phone." (tap: Family) or "Couldn't sync · tap to retry". The join request cards sit above the figure. "Expected this month" (money I gave) is hidden when nothing is expected; "Due this month" always shows.
-- **Home groups:** after the figure and the due lists: Bank, From a person, Gold, Money I gave, then **Only on this phone**, then Closed. Open private loans (taken and given) appear only in "Only on this phone", whose header shows what is still to pay and to come back on them, with the line "Your family doesn't see these."; the top totals and the due lists still include them. Closed private loans stay in Closed.
+- **Home groups:** after the figure and the due lists: Bank, From a person, Loan against something, Money I gave, then **Only on this phone**, then Closed. Open private loans (taken and given) appear only in "Only on this phone", whose header shows what is still to pay and to come back on them, with the line "Your family doesn't see these."; the top totals and the due lists still include them. Closed private loans stay in Closed.
 
 ## Backups
 

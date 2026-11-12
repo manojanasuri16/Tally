@@ -41,7 +41,8 @@ It is a sibling of Balance (`~/Balance/android`), whose foundation it copies (co
 android/app/src/main/java/com/tally/book/
   MainActivity.kt: pendingSharedText and pendingInvite stashes; TallyApplication.kt
   core/        Js helpers (n, inr, obj, arr...), JsonCodec, I18n, DevicePrefs, Clock + dates (Util)
-  model/       Db (DB, onDbRead), Book (freshDb), State (reset), Hooks (UiHooks), FileMeta
+  model/       Db (DB, onDbRead), Book (freshDb), State (reset), Hooks (UiHooks), FileMeta, Records (every write), Loans (view, due list, totals, checks),
+               LoanMath (instalments, interest periods, pending), LoanLabels (labels and wording), Reminders (pure: what is due, for a notification)
   data/        Ledger (load/lock/save), Crypto, Files (FileStore), BackupCore (the backup file: make, check, install; plain JVM),
                Backups (folder, daily WorkManager job + catch-up, share file, install under the app's locks; BackupWorker)
   sync/        family sync: SyncCrypto (HKDF, epoch seal/open, P-256 identities, sealing to a public key), Invite, Relay (+ HttpRelay),

@@ -22,7 +22,7 @@ class LoanTest {
     private fun d(s: String) = LocalDate.parse(s)
 
     private fun bank(emi: Double = 8885.0, start: String = "2026-01-10", dueDay: Int = 5) = saveLoan(obj(
-        "kind" to "bank", "name" to "SBI", "principal" to 100000, "rate" to 12, "tenureMonths" to 12, "emi" to emi,
+        "kind" to "bank", "name" to "SBI", "principal" to 100000, "rate" to 12, "tenure" to 12, "emi" to emi,
         "startDate" to start, "dueDay" to dueDay))
     private fun hand(rate: Double, unit: String, every: String, start: String = "2026-01-15", principal: Double = 100000.0) = saveLoan(obj(
         "kind" to "hand", "name" to "Ravi", "principal" to principal, "rate" to rate, "rateUnit" to unit,
@@ -35,14 +35,14 @@ class LoanTest {
     @Test fun emiFormula() {
         assertEquals(8885.0, emiFor(100000.0, 12.0, 12), 0.0)
         assertEquals(1000.0, emiFor(12000.0, 0.0, 12), 0.0)
-        val l = saveLoan(obj("kind" to "bank", "name" to "x", "principal" to 100000, "rate" to 12, "tenureMonths" to 12, "emi" to 0,
+        val l = saveLoan(obj("kind" to "bank", "name" to "x", "principal" to 100000, "rate" to 12, "tenure" to 12, "emi" to 0,
             "startDate" to "2026-01-10", "dueDay" to 5))
         assertEquals(8885.0, v(l).num("emi"), 0.0)
     }
 
     // emi given, tenure 0: months to clear 100000 at 1%/month with 8885 = ceil(-ln(1-1000/8885)/ln(1.01)) = ceil(11.99) = 12
     @Test fun tenureDerivedFromEmi() {
-        val l = saveLoan(obj("kind" to "bank", "name" to "x", "principal" to 100000, "rate" to 12, "tenureMonths" to 0, "emi" to 8885,
+        val l = saveLoan(obj("kind" to "bank", "name" to "x", "principal" to 100000, "rate" to 12, "tenure" to 0, "emi" to 8885,
             "startDate" to "2026-01-10", "dueDay" to 5))
         assertEquals(12.0, v(l).num("monthsLeft"), 0.0)
     }
@@ -132,14 +132,19 @@ class LoanTest {
         assertEquals(2000.0, v(hand(24.0, "", "month")).num("nextDueAmount"), 0.0) // rateUnit defaults to year
     }
 
-    // Principal payment of 40000 leaves 60000; 2% a month = 1200.
+    // Principal payment of 40000 on 15 Feb leaves 60000; from then 2% a month = 1200. The period 15 Jan - 15 Feb ran on the full
+    // 100000, so the interest due on 15 Feb (not paid yet) is still 2000; the next one, 15 Mar, is 1200.
     @Test fun handPrincipalReducesInterest() {
         val l = hand(2.0, "month", "month")
         pay(l, "2026-02-15", 40000.0, "principal")
         val w = v(l, "2026-02-16")
         assertEquals(60000.0, w.num("owed"), 0.0)
-        assertEquals(1200.0, w.num("nextDueAmount"), 0.0)
+        assertEquals("2026-02-15", w.s("nextDueDate")); assertEquals(2000.0, w.num("nextDueAmount"), 0.0)
+        assertEquals(1200.0, w.num("periodInterest"), 0.0)
         assertEquals(40000.0, w.num("paidPrincipal"), 0.0)
+        pay(l, "2026-02-16", 2000.0, "interest")
+        val x = v(l, "2026-02-17")
+        assertEquals("2026-03-15", x.s("nextDueDate")); assertEquals(1200.0, x.num("nextDueAmount"), 0.0)
     }
 
     // Gold loan, yearly interest, started 15 Dec 2025. First due 15 Dec 2026 (year boundary); 9% of 50000 = 4500. Paid on 15 Dec 2026 -> next 15 Dec 2027.
@@ -177,7 +182,12 @@ class LoanTest {
         assertEquals(100000.0, v(loan(l.s("id"))!!).num("owed"), 0.0)
     }
 
-    // Today 11 Nov: loan A due 15 Nov (this month), B due 5 Oct (overdue), C paid Nov so due 15 Dec (not listed).
+    // Payments cover the oldest instalment or period first. Today 11 Nov.
+    // A: hand, start 15 Oct, 2% of 100000 = 2000 a month; 2000 paid on 15 Oct covers the first period (due 15 Nov), so next is 15 Dec: not listed.
+    // B: bank, start 1 Aug, due day 5: instalments 5 Aug, 5 Sep, 5 Oct, 5 Nov. One EMI paid covers 5 Aug; 5 Sep, 5 Oct, 5 Nov are pending
+    //    (all before today): 3 x 8885 = 26655, row dated 5 Sep, overdue.
+    // C: hand, start 20 May, 1% of 50000 = 500; one 500 paid covers 20 Jun; 20 Jul, Aug, Sep, Oct are pending (4 x 500 = 2000) and
+    //    20 Nov falls later this month (500): the row is 2500, of which 2000 pending.
     @Test fun dueListAndTotals() {
         val a = hand(2.0, "month", "month", start = "2026-10-15")
         pay(a, "2026-10-15", 2000.0, "interest")
@@ -185,18 +195,25 @@ class LoanTest {
         pay(b, "2026-09-05", 8885.0, "emi")
         val c = hand(1.0, "month", "month", start = "2026-05-20", principal = 50000.0)
         pay(c, "2026-11-01", 500.0, "interest")
+        assertEquals("2026-12-15", v(a).s("nextDueDate")); assertTrue(v(a).b("paidThisPeriod"))
         val list = dueList(today)
-        assertEquals(listOf("2026-10-05", "2026-11-15"), list.map { it.s("date") })
-        assertTrue(list[0].b("overdue")); assertFalse(list[1].b("overdue"))
-        assertEquals(1, list.count { it.b("overdue") })
-        assertTrue(v(c).b("paidThisPeriod"))
+        assertEquals(listOf("2026-07-20", "2026-09-05"), list.map { it.s("date") })
+        assertEquals(listOf(2500.0, 26655.0), list.map { it.num("amount") })
+        assertEquals(listOf(2000.0, 26655.0), list.map { it.num("pending") })
+        assertEquals(listOf(4.0, 3.0), list.map { it.num("pendingCount") })
+        assertEquals(listOf(500.0, 0.0), list.map { it.num("upcoming") })
+        assertTrue(list.all { it.b("overdue") })
+        assertEquals(4.0, v(c).num("periodsPending"), 0.0); assertEquals(2000.0, v(c).num("interestPending"), 0.0)
+        assertEquals(3.0, v(b).num("emisPending"), 0.0); assertEquals(26655.0, v(b).num("amountPending"), 0.0)
         val t = totals(today)
-        assertEquals(8885.0 + 2000.0, t.num("dueThisMonth"), 0.0)
+        assertEquals(26655.0 + 2500.0, t.num("dueThisMonth"), 0.0)
+        assertEquals(26655.0 + 2000.0, t.num("pendingThisMonth"), 0.0)
         /* only the 1 Nov payment is in November */
         assertEquals(500.0, t.num("paidThisMonth"), 0.0)
         assertEquals(100000.0 + 50000.0, t.o("byKind").num("hand"), 0.0)
         assertEquals(3.0, t.num("count"), 0.0)
         assertEquals(suggest(a), 2000.0, 0.0)
+        assertEquals(suggest(c), 500.0, 0.0)                 // one period's interest; the pending 2000 is shown separately
         assertEquals("emi", suggestPayment(b, today).s("kind"))
         assertEquals(8885.0, suggestPayment(b, today).num("amount"), 0.0)
     }
@@ -330,7 +347,7 @@ class LoanTest {
     }
 
     @Test fun labels() {
-        assertEquals("Bank loan", kindLabel("bank")); assertEquals("From a person", kindLabel("hand")); assertEquals("Gold loan", kindLabel("gold"))
+        assertEquals("Bank loan", kindLabel("bank")); assertEquals("From a person", kindLabel("hand")); assertEquals("Loan against something", kindLabel("gold"))
         assertEquals("EMI", payKindLabel("emi")); assertEquals("Interest", payKindLabel("interest")); assertEquals("Principal", payKindLabel("principal"))
     }
 }
