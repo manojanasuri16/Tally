@@ -81,7 +81,8 @@ data class RelayState(
 )
 
 interface Relay {
-    suspend fun createFamily(familyId: String, memberId: String, secretHash: String, noticeHash: String?): RelayResult<Unit>
+    /** [pow]: the proof of work for this family and member ([SyncCrypto.pow], 20 bits; the tally_hardening migration). */
+    suspend fun createFamily(familyId: String, memberId: String, secretHash: String, noticeHash: String?, pow: String): RelayResult<Unit>
     suspend fun state(c: Cred, after: Int): RelayResult<RelayState>
     suspend fun push(c: Cred, epoch: Int, rows: List<RelayRow>): RelayResult<Int>
     suspend fun pull(c: Cred, since: Long, max: Int): RelayResult<List<RelayRow>>
@@ -141,8 +142,8 @@ class HttpRelay(
     private fun long(v: Any?, what: String): Long = (v as? Double)?.toLong() ?: throw BadResponse("$what: not a number")
     private fun text(v: Any?, what: String): String = v as? String ?: throw BadResponse("$what: not text")
 
-    override suspend fun createFamily(familyId: String, memberId: String, secretHash: String, noticeHash: String?): RelayResult<Unit> =
-        call("tally_family_create", obj("p_family" to familyId, "p_member" to memberId, "p_secret_hash" to secretHash, "p_notice_hash" to noticeHash)) { }
+    override suspend fun createFamily(familyId: String, memberId: String, secretHash: String, noticeHash: String?, pow: String): RelayResult<Unit> =
+        call("tally_family_create", obj("p_family" to familyId, "p_member" to memberId, "p_secret_hash" to secretHash, "p_notice_hash" to noticeHash, "p_pow" to pow)) { }
 
     override suspend fun state(c: Cred, after: Int): RelayResult<RelayState> = call("tally_state", cred(c, "p_after" to after)) { v ->
         val o = v.asObj() ?: throw BadResponse("state: not an object")
@@ -249,7 +250,7 @@ class HttpRelay(
     override suspend fun pending(familyId: String, memberId: String, notice: String): RelayResult<Int> =
         call("tally_pending", obj("p_family" to familyId, "p_member" to memberId, "p_notice" to notice)) { v -> long(v, "pending").toInt() }
 
-    private class BadResponse(msg: String) : Exception(msg)
+    class BadResponse(msg: String) : Exception(msg)
 
     private suspend fun <T> call(fn: String, body: Obj, read: (Any?) -> T): RelayResult<T> = withContext(Dispatchers.IO) {
         if (baseUrl.isBlank() || apiKey.isBlank()) return@withContext RelayResult.Err(SyncError.NotConfigured)
@@ -270,7 +271,7 @@ class HttpRelay(
             conn.setFixedLengthStreamingMode(bytes.size)
             conn.outputStream.use { it.write(bytes) }
             val status = conn.responseCode
-            val text = (if (status >= 400) conn.errorStream else conn.inputStream)?.use { String(it.readBytes(), Charsets.UTF_8) } ?: ""
+            val text = (if (status >= 400) conn.errorStream else conn.inputStream)?.use { String(readCapped(it), Charsets.UTF_8) } ?: ""
             if (status in 200..299) {
                 val v = if (text.isBlank()) null else JsonCodec.parse(text)
                 RelayResult.Ok(read(v))
@@ -287,6 +288,26 @@ class HttpRelay(
     }
 
     companion object {
+        /**
+         * The most a relay answer may hold. The largest honest one is a file (6 MiB of base64) or a pull page (4 MiB of rows
+         * since the tally_hardening migration); anything bigger is a broken or hostile relay and is refused before it can
+         * exhaust the phone's memory.
+         */
+        const val MAX_RESPONSE = 10 * 1024 * 1024
+
+        /** Reads at most [MAX_RESPONSE] bytes; more is a [BadResponse]. */
+        fun readCapped(input: java.io.InputStream, cap: Int = MAX_RESPONSE): ByteArray {
+            val out = java.io.ByteArrayOutputStream()
+            val buf = ByteArray(64 * 1024)
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                if (out.size() + n > cap) throw BadResponse("response too large")
+                out.write(buf, 0, n)
+            }
+            return out.toByteArray()
+        }
+
         /**
          * PostgREST error body { code, message, ... } to a SyncError (the codes are listed at the top of the tally_membership
          * migration, TA007 "replaced" in tally_rejoin; "not an admin" became TA006 in tally_not_admin_code, because PostgREST sends 42501 as HTTP 401, whose body

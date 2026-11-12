@@ -23,9 +23,14 @@ object Sync {
 
     val relay: Relay by lazy { HttpRelay(BuildConfig.SUPABASE_URL, BuildConfig.SUPABASE_ANON_KEY) }
 
-    val engine: SyncEngine by lazy { SyncEngine(relay, LedgerBook, StoreFiles, notices = Notices.store) }
-
     private val scope = MainScope()
+
+    val engine: SyncEngine by lazy {
+        SyncEngine(relay, LedgerBook, StoreFiles, notices = Notices.store).also { e ->
+            // locked: the invite secrets of checked join requests leave memory with the book (the review's Info item)
+            scope.launch { Ledger.phase.collect { if (it != Ledger.Phase.READY) e.forgetSecrets() } }
+        }
+    }
 
     /** Starts a sync that outlives the screen that asked for it (pull to refresh, app open). No-op without a family or a waiting join. */
     fun syncInBackground() {

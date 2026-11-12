@@ -68,7 +68,8 @@ fun isoOfMillis(ms: Double): String =
 
 /** Marks a record as changed by me now, and for the sync layer. */
 fun touch(rec: Obj) {
-    rec["updatedAt"] = Clock.millis().toDouble()
+    // never earlier than the version being replaced, never far ahead of this phone's clock (docs/DESIGN.md "Merge rules")
+    rec["updatedAt"] = com.tally.book.sync.SyncModel.stamp(rec.num("updatedAt"), Clock.millis())
     rec["updatedBy"] = myId()
     val id = rec.s("id")
     if (id.isNotEmpty()) DB.oo("sync").oo("dirty")[id] = true
@@ -116,10 +117,11 @@ fun isPrivate(db: Obj, rec: Obj): Boolean {
 /** Empties [rec] in place down to a tombstone, keeping the fields in [keep]. */
 private fun tombstone(rec: Obj, vararg keep: String) {
     val kept = keep.filter { rec.containsKey(it) }.associateWith { rec[it] }
-    val id = rec["id"]
+    val id = rec["id"]; val prev = rec["updatedAt"]
     rec.clear(); rec["id"] = id
     kept.forEach { (k, v) -> rec[k] = v }
     rec["deleted"] = true
+    if (prev != null) rec["updatedAt"] = prev          // so the tombstone is stamped after the version it replaces
     touch(rec)
 }
 

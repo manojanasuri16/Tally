@@ -34,6 +34,10 @@ fun WaitingCard(j: PendingJoin) {
             ?: t("wait.body", "You asked to join {name}. This phone joins by itself once an admin allows it.", "name" to fam)
         Text(body, style = Apple.type.body, color = Apple.colors.secondaryLabel)
         if (j.since > 0) Text(t("wait.asked", "Asked {when}", "when" to SyncText.ago(j.since, maxOf(Clock.millis(), j.since))), style = Apple.type.callout, color = Apple.colors.secondaryLabel)
+        if (j.back && j.code.isNotEmpty()) {
+            // the admin sees the same code and is asked to compare it with you before letting this phone in as you
+            Text(t("wait.back.code", "This phone's code: {code}. An admin may ask you to read it out.", "code" to j.code), style = Apple.type.headline, color = Apple.colors.label)
+        }
     }
     PrimaryButton(
         t("wait.check", "Check now"), { if (!state.running) scope.launch { FamilyFlow.checkJoin() } },
@@ -51,6 +55,7 @@ fun GoneCard(g: FamilyGone) {
         "removed" -> t("gone.removed", "You were removed from {name}. Your entries are still on this phone.", "name" to fam)
         "replaced" -> t("gone.replaced", "This phone was replaced by a new phone. It is no longer in {name}. Your entries are still on this phone.", "name" to fam)
         "denied" -> t("gone.denied", "An admin did not let you into {name}.", "name" to fam)
+        "ended" -> t("gone.ended", "Sharing with {name} stopped: nobody else joined it for 60 days. Your entries are still on this phone. You can start sharing again at any time.", "name" to fam)
         else -> t("gone.expired", "Your request to join {name} ran out. Ask for a new code to try again.", "name" to fam)
     }
     Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

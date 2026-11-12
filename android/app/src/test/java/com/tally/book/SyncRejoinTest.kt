@@ -54,15 +54,21 @@ class SyncRejoinTest {
         val b2 = named(Phone("B2", relay), "B")
         b2.loan("ln", "Entered on the new phone first")                     // written before it was in any family
 
-        assertEquals(SyncResult.JoinPending, rb { b2.engine.requestJoin(a.invite(), back = true) })
+        // B is an admin: someone other than the approving admin makes the invite (here C, a member)
+        assertEquals(SyncResult.JoinPending, rb { b2.engine.requestJoin(c.invite(), back = true) })
         assertTrue(b2.view.joining!!.back)
         done(a.sync())
         val req = a.engine.requests.value.single()
         assertTrue(req.back); assertEquals("B", req.name)
-        assertEquals("B says they are back on a new phone. You invited them.", MemberText.requestLine(req, "Home", a.me))
-        assertEquals("m-B", MemberText.likelyMember(req, a.view.members)?.id)   // picked by the name
+        assertEquals("B says they are back on a new phone. C invited them.", MemberText.requestLine(req, "Home", a.me))
+        // the admin compares this code with the one the new phone shows
+        assertEquals(b2.view.joining!!.code, req.code); assertEquals(9, req.code.length)
         done(rb { a.engine.approveAs(req.id, "m-B") })
         done(b2.sync())
+        // what it had before joining waits for the person's answer
+        assertEquals(1, b2.view.shareAsk); assertNull(relay.records[famId(a)]!!["ln"])
+        done(b2.share())
+        assertEquals(0, b2.view.shareAsk)
 
         // the new phone is B: same member id, so everything B wrote still shows B's name; the admin role and joined date stay
         assertEquals("m-B", b2.me)
@@ -160,7 +166,7 @@ class SyncRejoinTest {
         val a = Phone("A", relay); val b = Phone("B", relay); val c = Phone("C", relay)
         family(a, b, c)
         val b2 = named(Phone("B2", relay), "B")
-        assertEquals(SyncResult.JoinPending, rb { b2.engine.requestJoin(a.invite(), back = true) })
+        assertEquals(SyncResult.JoinPending, rb { b2.engine.requestJoin(c.invite(), back = true) })
         done(a.sync())
         done(rb { a.engine.approveAs(a.engine.requests.value.single().id, "m-B") })
 
@@ -222,6 +228,34 @@ class SyncRejoinTest {
         assertNotNull(a2.rec("payments", "pb"))
     }
 
+    @Test fun noAdminCanTakeTheCreatorsPlaceAndNoAdminAloneAnotherAdmins() {
+        // M1: a malicious admin (B) joins from a second install and asks to be "back" as the creator, or as another admin
+        val a = Phone("A", relay); val b = Phone("B", relay); val c = Phone("C", relay)
+        family(a, b, c)
+        done(rb { b.engine.setAdmin("m-C", true) })
+        val evil = named(Phone("Evil", relay), "A")
+        assertEquals(SyncResult.JoinPending, rb { evil.engine.requestJoin(b.invite(), back = true) })
+        done(b.sync())
+        val req = b.engine.requests.value.single()
+        val creator = b.view.members.single { it.id == "m-A" }
+        assertNotNull(MemberText.allowAsBlocked(req, creator, b.me))
+        assertEquals(SyncResult.Failed(SyncError.Refused), rb { b.engine.approveAs(req.id, "m-A") })
+        // and the relay itself refuses, whatever a modified app sends
+        val fid = famId(a)
+        assertEquals(RelayResult.Err(SyncError.Refused), rb { relay.reclaim(cred(b), req.id, "m-A", 2, listOf(BoxFor("m-A", "x"), BoxFor("m-B", "x"))) })
+        // another admin's place, approved by the admin who made the invite: refused
+        val adminC = b.view.members.single { it.id == "m-C" }
+        assertNotNull(MemberText.allowAsBlocked(req, adminC, b.me))
+        assertEquals(SyncResult.Failed(SyncError.Refused), rb { b.engine.approveAs(req.id, "m-C") })
+        assertEquals(RelayResult.Err(SyncError.Refused), rb { relay.reclaim(cred(b), req.id, "m-C", 2, listOf(BoxFor("m-C", "x"), BoxFor("m-B", "x"))) })
+        assertEquals(1, relay.fams[fid]!!.epoch)
+        // a plain member's place can still be handed over by one admin (as before), and the admin can still say no
+        assertNull(MemberText.allowAsBlocked(req, b.view.members.single { it.id == "m-B" }, b.me))
+        done(rb { b.engine.deny(req.id) })
+        // the creator moving phones approves on the old phone: still allowed (theOnlyAdminMovingToANewPhoneApprovesItFromTheOldOne)
+        done(a.sync()); done(b.sync()); done(c.sync())
+    }
+
     @Test fun theAdminHintIsForTheOnlyAdminOnceSomeoneElseIsIn() {
         val me = FamilyMember("m-A", "A", admin = true, creator = true, me = true, since = 1)
         val other = FamilyMember("m-B", "B", admin = false, creator = false, me = false, since = 2)
@@ -244,7 +278,7 @@ class SyncRejoinTest {
         assertEquals("m-B", b2.me)
         assertNotNull(b2.rec("loans", "lp"))
         // then it comes back as itself, so the old phone (maybe in someone else's hands) stops working
-        assertEquals(SyncResult.JoinPending, rb { b2.engine.requestJoin(a.invite(), back = true) })
+        assertEquals(SyncResult.JoinPending, rb { b2.engine.requestJoin(c.invite(), back = true) })
         assertNotEquals("m-B", b2.db.o("joining").s("as"))                    // asked under a fresh id: B is an active member
         done(b2.sync())                                                        // still syncing as B meanwhile
         done(a.sync())
@@ -267,7 +301,7 @@ class SyncRejoinTest {
         val backup = b.db.copyObj()
         TestClock.advance(1)
         val b2 = named(Phone("B2", relay), "B")
-        done(b2.comeBackVia(a, "m-B"))
+        done(b2.comeBackVia(a, "m-B", c.invite()))
         a.loan("la", "After"); done(a.sync())
 
         // restoring the old phone's backup as it is would bring back the replaced credentials: the family says so

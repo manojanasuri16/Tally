@@ -73,7 +73,12 @@ object Membership {
     fun meObj(secret: String, notice: String, id: SyncCrypto.Identity, at: Long = 0): Obj =
         obj("secret" to secret, "notice" to notice, "pub" to Invite.b64url(id.publicSpki), "priv" to Invite.b64url(id.privatePkcs8), "at" to at.toDouble())
 
-    /** Puts a version-2 family in the book (create or an approved join). The sync state starts over, as in version 1. */
+    /**
+     * Puts a version-2 family in the book (create, or an approved join when [invite] is given). The sync state starts over, as in
+     * version 1. Creating shares everything at once. Joining shares nothing that was already on this phone until the person
+     * answers "Share your existing entries?" ([SyncModel.holdExisting], [SyncEngine.answerShare]); and the joiner's own member
+     * record is the one the approving admin wrote (with the admin's certificate for its key), taken from the first pull.
+     */
     fun enter(db: Obj, id: String, name: String, creator: String?, me: Obj, keys: Map<Int, ByteArray>, role: String, pins: Map<String, ByteArray>, now: Long, invite: String? = null, back: Boolean = false) {
         val k = obj(); keys.forEach { (e, v) -> k[e.toString()] = b64.encodeToString(v) }
         val p = obj(); pins.forEach { (m, v) -> p[m] = Invite.b64url(v) }
@@ -91,13 +96,17 @@ object Membership {
         db.remove("joining"); db.remove("familyGone")
         val pub = me.s("pub")
         val meId = db.o("me")!!.s("id")
-        // back on a new phone: the approving admin wrote this member's record (with the new key); a phone that has no copy of
-        // it yet takes that one from the first pull instead of pushing a thinner one of its own over it
-        if (!back || db.objs("members").any { it.s("id") == meId }) SyncModel.upsertMe(db, now, pub)
-        // the invite this member came in with travels in its record, so every admin refuses that invite if it comes back
-        if (invite != null) db.objs("members").firstOrNull { it.s("id") == meId }?.set("invite", invite)
         db.o("family")!!.oo("pins")[meId] = pub
-        SyncModel.markAllDirty(db)
+        SyncModel.syncOf(db)["signed"] = true
+        if (invite == null) {
+            SyncModel.upsertMe(db, now, pub)
+            SyncModel.markAllDirty(db)
+            return
+        }
+        // let in by an admin: the admin wrote this member's record (name, key, invite, the admin's certificate for the key); a phone
+        // that has no copy of it yet takes that one from the first pull instead of pushing a thinner one of its own over it
+        db.a("members")?.removeAll { it.asObj()?.s("id") == meId && it.asObj()?.s("pub") != pub }
+        if (SyncModel.holdExisting(db) == 0) SyncModel.markAllDirty(db)
     }
 
     /**
@@ -115,17 +124,37 @@ object Membership {
         val meId = db.o("me")!!.s("id")
         grant.pins.forEach { (m, p) -> if (m != meId) pin(db, m, p, force = true) }
         f.oo("pins")[meId] = me.s("pub")
-        SyncModel.upsertMe(db, now, me.s("pub"))
-        db.objs("members").firstOrNull { it.s("id") == meId }?.set("invite", invite)
+        // the admin wrote this member's record with the new key and its certificate; the next pull brings it
         db.remove("joining"); db.remove("familyGone")
     }
 
-    /** Keeps this phone's own member record carrying this phone's public key (after coming back on a new phone, once it is pulled). */
+    /**
+     * Keeps this phone's own member record carrying this phone's public key and name. Only once the record the approving admin
+     * wrote (with its certificate for the key) is here: until then a key of this phone's own is not written over it.
+     */
     fun ownRecordCarriesMyKey(db: Obj, now: Long) {
         val pub = db.o("family")?.o("me")?.s("pub")?.takeIf { it.isNotEmpty() } ?: return
         val meId = db.o("me")?.s("id").orEmpty()
         val rec = db.objs("members").firstOrNull { it.s("id") == meId } ?: return
-        if (rec.s("pub") != pub && !rec.b("deleted")) SyncModel.upsertMe(db, now, pub)
+        if (rec.b("deleted")) return
+        if (rec.s("pub") != pub) { if (rec["cert"] == null || rec.s("updatedBy") == meId) SyncModel.upsertMe(db, now, pub) }
+        else if (rec.s("name") != db.o("me")?.s("name") && db.o("me")?.s("name").orEmpty().isNotBlank()) SyncModel.upsertMe(db, now, pub)
+    }
+
+    /**
+     * Once per book (records synced by an older version were not signed): this phone's own member record goes up again, signed,
+     * so phones that take a member record only from a proved writer keep showing this member's name.
+     */
+    fun signOwnRecordOnce(db: Obj, now: Long) {
+        val sync = db.o("sync") ?: return
+        if (sync.b("signed")) return
+        val meId = db.o("me")?.s("id").orEmpty()
+        val rec = db.objs("members").firstOrNull { it.s("id") == meId }
+        if (rec != null && !rec.b("deleted")) {
+            rec["updatedAt"] = SyncModel.stamp(rec.num("updatedAt"), now); rec["updatedBy"] = meId
+            SyncModel.dirty(db)[meId] = true
+        }
+        sync["signed"] = true
     }
 
     /** Leaves the family on this phone: forgets the family and the sync state, keeps every record. [why] is told once on screen. */
@@ -187,12 +216,91 @@ object Membership {
         return true
     }
 
-    /** Pins the public key of every member record that has one and is not pinned yet (trust on first use). */
-    fun pinFromRecords(db: Obj) {
-        for (m in db.objs("members")) {
-            val id = m.s("id"); val pub = Invite.unb64url(m.s("pub")) ?: continue
-            if (id.isNotEmpty() && SyncCrypto.publicKey(pub) != null) pin(db, id, pub)
+    // ---------- who wrote what: record signatures and key certificates (docs/DESIGN.md "Who wrote what") ----------
+
+    /** What a pushing member signs: the family, the record's kind and id, the signer, and the record exactly as it travels. */
+    fun recordSigInput(fam: String, kind: String, id: String, by: String, json: String): ByteArray =
+        "tally-rec|1|$fam|$kind|$id|$by|$json".toByteArray(Charsets.UTF_8)
+
+    /** The signature that travels beside a record: { by, s } (s: base64url DER), or null when the key cannot sign. */
+    fun signRecord(fam: Fam, kind: String, rec: Obj): Obj? {
+        val json = JsonCodec.stringify(rec)
+        val s = SyncCrypto.sign(fam.identity.privatePkcs8, recordSigInput(fam.id, kind, rec.s("id"), fam.myId, json)) ?: return null
+        return obj("by" to fam.myId, "s" to Invite.b64url(s))
+    }
+
+    /** What an admin signs when it vouches for a member's key: family, member and key. */
+    fun certInput(fam: String, member: String, pub: String): ByteArray = "tally-pin|1|$fam|$member|$pub".toByteArray(Charsets.UTF_8)
+
+    /**
+     * An admin's certificate for [member]'s key [pub] (base64url SPKI), written into that member's record when the admin lets
+     * them in (or back on a new phone). Other phones pin a member's key from a record only through such a certificate.
+     */
+    fun cert(fam: Fam, member: String, pub: String): Obj? {
+        val s = SyncCrypto.sign(fam.identity.privatePkcs8, certInput(fam.id, member, pub)) ?: return null
+        return obj("by" to fam.myId, "s" to Invite.b64url(s))
+    }
+
+    private fun admins(db: Obj): Set<String> = adminIds(db)
+
+    /** The admins as the relay last said (DB.family.roster). */
+    fun adminIds(db: Obj): Set<String> = db.o("family")?.objs("roster").orEmpty().filter { it.s("role") == "admin" }.map { it.s("id") }.toSet()
+
+    private fun pinned(db: Obj, member: String): ByteArray? = (db.o("family")?.o("pins")?.get(member) as? String)?.let { Invite.unb64url(it) }
+
+    /** Pins [rec]'s key when it is not pinned yet and carries a certificate from an admin whose key is pinned here. True if pinned. */
+    fun pinFromCert(db: Obj, rec: Obj): Boolean {
+        val f = db.o("family") ?: return false
+        val id = rec.s("id"); val pubText = rec.s("pub")
+        if (id.isEmpty() || pinned(db, id) != null) return false
+        val pub = Invite.unb64url(pubText)?.takeIf { SyncCrypto.publicKey(it) != null } ?: return false
+        val c = rec.o("cert") ?: return false
+        val by = c.s("by")
+        if (by !in admins(db) && db.o("family")?.o("wasAdmin")?.b(by) != true && by != db.o("family")?.s("creator")) return false
+        val key = pinned(db, by) ?: return false
+        val sig = Invite.unb64url(c.s("s")) ?: return false
+        if (!SyncCrypto.verify(key, certInput(f.s("id"), id, pubText), sig)) return false
+        pin(db, id, pub)
+        return true
+    }
+
+    /**
+     * Pins every member key an admin vouched for (a certificate in the member's record, checked against the admin's pinned key),
+     * until nothing more can be learnt. Never from a member record alone: any member can write one (the review's M4).
+     */
+    fun pinFromCerts(db: Obj) {
+        var more = true
+        while (more) { more = false; for (m in db.objs("members")) if (pinFromCert(db, m)) more = true }
+    }
+
+    /** [SyncModel.Trust] from this book: signatures checked against its pins, roles from the relay's roster. */
+    class BookTrust(private val db: Obj) : SyncModel.Trust {
+        private val fam = db.o("family")?.s("id").orEmpty()
+        override fun signer(w: SyncModel.WireRecord): String? {
+            val sig = w.sig ?: return null
+            val by = sig.s("by"); val s = Invite.unb64url(sig.s("s")) ?: return null
+            val key = pinned(db, by) ?: return null
+            val ok = SyncCrypto.verify(key, recordSigInput(fam, w.kind, w.rec.s("id"), by, JsonCodec.stringify(w.rec)), s)
+            return if (ok) by else null
         }
+        /**
+         * An admin now, or one this phone has seen as an admin (what they wrote while they were stays good after they step down,
+         * leave or are removed: the relay refuses anything they push afterwards).
+         */
+        override fun admin(member: String): Boolean = member in admins(db) || db.o("family")?.o("wasAdmin")?.b(member) == true
+            || (member.isNotEmpty() && member == db.o("family")?.s("creator"))
+        override fun learn(rec: Obj) { pinFromCert(db, rec) }
+    }
+
+    /**
+     * A short code for a phone's key, shown on the new phone while it waits and to the admin who decides ("1234 5678"), so they
+     * can compare it over a call before letting someone back in as a member.
+     */
+    fun phoneCode(pub: ByteArray): String {
+        val h = java.security.MessageDigest.getInstance("SHA-256").digest(pub)
+        val n = ((h[0].toLong() and 0xff) shl 24 or ((h[1].toLong() and 0xff) shl 16) or ((h[2].toLong() and 0xff) shl 8) or (h[3].toLong() and 0xff)) % 100_000_000L
+        val d = n.toString().padStart(8, '0')
+        return d.substring(0, 4) + " " + d.substring(4)
     }
 
     /** Caches what the relay said about the family. */
@@ -202,6 +310,8 @@ object Membership {
         f["role"] = st.myRole
         f["creator"] = st.creator
         f["roster"] = arr().also { a -> st.members.forEach { m -> a.add(obj("id" to m.id, "role" to m.role, "since" to m.since.toDouble(), "has" to m.has)) } }
+        // everyone this phone has seen as an admin: a certificate an admin made stays good after they step down or leave
+        st.members.filter { it.admin }.forEach { f.oo("wasAdmin")[it.id] = true }
         f["invites"] = arr().also { a -> st.invites.forEach { i -> a.add(obj("id" to i.id, "by" to i.by, "expires" to i.expiresAt.toDouble())) } }
     }
 
@@ -402,13 +512,13 @@ object Membership {
 data class FamilyMember(val id: String, val name: String, val admin: Boolean, val creator: Boolean, val me: Boolean, val since: Long)
 
 /** A join request an admin's phone has checked: "<name> wants to join <family>. <invitedBy> invited them." [id] is the invite id. */
-data class JoinRequest(val id: String, val name: String, val invitedById: String, val invitedBy: String, val at: Long, val expiresAt: Long, val back: Boolean = false)
+data class JoinRequest(val id: String, val name: String, val invitedById: String, val invitedBy: String, val at: Long, val expiresAt: Long, val back: Boolean = false, val code: String = "")
 
 /** An invite that has not been used yet. */
 data class OpenInvite(val id: String, val byId: String, val byName: String, val mine: Boolean, val expiresAt: Long)
 
 /** This phone asked to join and waits for an admin. */
-data class PendingJoin(val familyName: String, val inviter: String?, val since: Long, val expiresAt: Long, val back: Boolean = false)
+data class PendingJoin(val familyName: String, val inviter: String?, val since: Long, val expiresAt: Long, val back: Boolean = false, val code: String = "")
 
 /** Why this phone is no longer in (or did not get into) a family: "removed" | "replaced" | "denied" | "expired". Told once, then [SyncEngine.clearGone]. */
 data class FamilyGone(val familyName: String, val why: String, val at: Long)
@@ -419,6 +529,8 @@ data class MembershipView(
     val myId: String, val iAmAdmin: Boolean, val iAmCreator: Boolean,
     val members: List<FamilyMember>, val invites: List<OpenInvite>,
     val joining: PendingJoin?, val gone: FamilyGone?, val waitingForKey: Boolean,
+    /** Shared entries that were on this phone before it was let in and wait for "Share your existing entries?" (0: no question). */
+    val shareAsk: Int = 0,
 ) {
     val inFamily: Boolean get() = familyId != null && !oldFamily
 
@@ -440,12 +552,14 @@ data class MembershipView(
             val invites = f?.objs("invites").orEmpty().map { i ->
                 OpenInvite(i.s("id"), i.s("by"), nameOf(i.s("by")), i.s("by") == myId, i.num("expires").toLong())
             }
-            val j = db.o("joining")?.let { PendingJoin(it.s("name"), (it["inviter"] as? String), it.num("at").toLong(), it.num("expires").toLong(), it.b("back")) }
+            val j = db.o("joining")?.let { PendingJoin(it.s("name"), (it["inviter"] as? String), it.num("at").toLong(), it.num("expires").toLong(), it.b("back"),
+                Invite.unb64url(it.o("me")?.s("pub").orEmpty())?.let { p -> Membership.phoneCode(p) }.orEmpty()) }
             val g = db.o("familyGone")?.let { FamilyGone(it.s("name"), it.s("why"), it.num("at").toLong()) }
             return MembershipView(
                 familyId = f?.s("id")?.takeIf { it.isNotEmpty() }, familyName = f?.s("name").orEmpty(), oldFamily = Membership.isOld(db),
                 myId = myId, iAmAdmin = fam?.admin == true, iAmCreator = creator != null && creator == myId,
                 members = members, invites = invites, joining = j, gone = g, waitingForKey = fam?.waitingForKey == true,
+                shareAsk = if (fam != null) SyncModel.heldLoans(db).size else 0,
             )
         }
     }

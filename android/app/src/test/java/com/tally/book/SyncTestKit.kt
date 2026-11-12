@@ -12,6 +12,9 @@ import java.time.LocalDateTime
  * the role rules (last admin, the creator, removing yourself), limits, and a global seq taken at upsert. Each call is atomic,
  * as the family lock makes them on the real relay. Files in transit as in the tally_files_in_transit migration: who is owed
  * each file (the then-active members but the uploader, or the askers), acknowledgements, 30 days, asks, the per-family cap.
+ * The tally_hardening migration: the proof of work and the limits on new families (per [source] and relay-wide), each family's
+ * byte budget and the relay's ceiling, 4 MiB pull pages, the daily download allowance, 300 epochs, box tidying, the reclaim
+ * rules for the creator and admins, and members who are not admins seeing only their own invites.
  */
 class FakeRelay : Relay {
     class Row(val kind: String, val blob: String, val seq: Long)
@@ -44,6 +47,39 @@ class FakeRelay : Relay {
     val acks = ArrayList<Pair<String, String>>()
     private var seq = 0L
     private var joinOrder = 0L
+
+    /** Zero bits of proof of work a new family needs (20 in SQL; tests keep it small). */
+    var powBits = 8
+    /** The address the next calls come from (tally_source: a peppered hash; null = no usable header). */
+    var source: String? = "phone"
+    /** tally_create_log: (when, source). */
+    val createLog = ArrayList<Pair<Long, String?>>()
+    /** The relay's ceiling across all families (300 MiB in SQL). */
+    var ceiling = 300L * 1024 * 1024
+    /** The family byte budgets (5 MiB for a family of one, 20 MiB otherwise) and the daily download allowance. */
+    var budgetOne = 5L * 1024 * 1024
+    var budgetMany = 20L * 1024 * 1024
+    var egressCap = 200L * 1024 * 1024
+    /** Bytes in a pull page (4 MiB in SQL). */
+    var pageBytes = 4L * 1024 * 1024
+    /** Download bytes per family per day: family -> (day, bytes). */
+    val egress = HashMap<String, Pair<Long, Long>>()
+    private fun recordBytes(famId: String) = records[famId]?.values?.sumOf { it.blob.length.toLong() } ?: 0L
+    private fun boxBytes(f: Fam) = f.boxes.values.sumOf { m -> m.values.sumOf { it.length.toLong() } }
+    private fun held(): Long = fams.values.sumOf { recordBytes(it.id) + boxBytes(it) } + blobs.values.sumOf { b -> b.values.sumOf { it.length.toLong() } }
+    fun budget(f: Fam) = if (f.members.size <= 1) budgetOne else budgetMany
+    private fun spend(f: Fam, bytes: Long) {
+        val day = now() / (24 * 3600_000L)
+        val (d, b) = egress[f.id] ?: (day to 0L)
+        val used = (if (d == day) b else 0L) + bytes
+        if (used > egressCap) fail(SyncError.Limit)
+        egress[f.id] = day to used
+    }
+    /** tally_box_tidy: boxes of members no longer active go; each member keeps its newest 20. */
+    private fun tidyBoxes(f: Fam) {
+        f.boxes.keys.toList().forEach { m -> if (f.members[m]?.status != "active") f.boxes.remove(m) }
+        f.boxes.values.forEach { b -> b.keys.sortedDescending().drop(20).forEach { b.remove(it) } }
+    }
 
     /** Fail the next calls of each kind with this error (consumed one per call). */
     val failPull = ArrayDeque<SyncError?>()
@@ -118,22 +154,32 @@ class FakeRelay : Relay {
             if (!mine.containsKey(epoch)) mine[epoch] = b.box
             f.members[b.member]!!.has = maxOf(f.members[b.member]!!.has, epoch)
         }
+        tidyBoxes(f)
     }
     private fun newEpoch(f: Fam, caller: String, epoch: Int, boxes: List<BoxFor>) {
         if (epoch != f.epoch + 1) fail(SyncError.Stale)
+        if (epoch > 300) fail(SyncError.Limit)
         if (boxes.none { it.member == caller }) fail(SyncError.BadData("caller box"))
         putBoxes(f, epoch, boxes)
         f.epoch = epoch; f.rotate = false
         f.requests.clear(); f.invites.clear()
     }
 
-    override suspend fun createFamily(familyId: String, memberId: String, secretHash: String, noticeHash: String?) = r("create") {
+    override suspend fun createFamily(familyId: String, memberId: String, secretHash: String, noticeHash: String?, pow: String) = r("create") {
+        if (!Regex("^[0-9]{1,20}$").matches(pow) || !SyncCrypto.powOk(familyId, memberId, pow, powBits)) fail(SyncError.BadData("pow"))
         val cur = fams[familyId]
         if (cur != null) {
             val m = cur.members[memberId]
             if (cur.creator == memberId && m != null && m.hash == secretHash && m.status == "active") return@r
             fail(SyncError.Unauthorised)
         }
+        val t = now(); val hour = 3600_000L
+        createLog.removeIf { it.first < t - 48 * hour }
+        val src = source
+        if (src != null && (createLog.count { it.second == src && it.first > t - hour } >= 5 || createLog.count { it.second == src && it.first > t - 24 * hour } >= 20)) fail(SyncError.Limit)
+        if (createLog.count { it.first > t - hour } >= 100 || createLog.count { it.first > t - 24 * hour } >= 500) fail(SyncError.Limit)
+        if (held() > ceiling) fail(SyncError.Limit)
+        createLog.add(t to src)
         val f = Fam(familyId, memberId)
         f.members[memberId] = Member(memberId, secretHash, noticeHash, "admin", "active", 1, ++joinOrder)
         fams[familyId] = f
@@ -152,7 +198,7 @@ class FakeRelay : Relay {
             f.epoch, f.creator, f.rotate, me.role,
             active(f).sortedBy { it.joined }.map { RelayMember(it.id, it.role, it.joined, it.has) },
             tamperBoxes?.invoke(me.id, boxes) ?: boxes,
-            f.invites.values.filter { !it.used && it.expires > now() }.map { RelayInvite(it.id, it.by, it.expires) },
+            f.invites.values.filter { !it.used && it.expires > now() && (me.role == "admin" || it.by == me.id) }.map { RelayInvite(it.id, it.by, it.expires) },
             tamperRequests?.invoke(reqs) ?: reqs,
             replayMeta ?: f.meta,
         )
@@ -164,8 +210,12 @@ class FakeRelay : Relay {
             val (f, _) = auth(c)
             if (epoch != f.epoch) fail(SyncError.Stale)
             val m = records.getOrPut(f.id) { LinkedHashMap() }
+            val last = rows.associateBy { it.id }
+            val delta = last.values.sumOf { it.blob.length.toLong() } - last.keys.sumOf { m[it]?.blob?.length?.toLong() ?: 0L }
+            val count = m.size + last.keys.count { it !in m }
+            if (count > 20_000) fail(SyncError.Limit)
+            if (delta > 0 && (recordBytes(f.id) + delta + boxBytes(f) > budget(f) || held() + delta > ceiling)) fail(SyncError.Limit)
             rows.forEach { m[it.id] = Row(it.kind, it.blob, ++seq) }
-            if (m.size > 20_000) fail(SyncError.Limit)
             rows.size
         }
         if (out is RelayResult.Ok) onPush?.let { h -> onPush = null; h() }
@@ -176,8 +226,12 @@ class FakeRelay : Relay {
         failPull.removeFirstOrNull()?.let { return RelayResult.Err(it) }
         return r("pull") {
             val (f, _) = auth(c)
-            (records[f.id] ?: emptyMap<String, Row>()).entries.filter { it.value.seq > since }.sortedBy { it.value.seq }
-                .take(max.coerceIn(1, 500)).map { RelayRow(it.key, it.value.kind, it.value.blob, it.value.seq) }
+            val page = (records[f.id] ?: emptyMap<String, Row>()).entries.filter { it.value.seq > since }.sortedBy { it.value.seq }
+                .take(max.coerceIn(1, 500))
+            var cum = 0L
+            val out = page.filterIndexed { i, e -> cum += e.value.blob.length; i == 0 || cum <= pageBytes }
+            spend(f, out.sumOf { it.value.blob.length.toLong() })
+            out.map { RelayRow(it.key, it.value.kind, it.value.blob, it.value.seq) }
         }
     }
 
@@ -186,6 +240,7 @@ class FakeRelay : Relay {
         val (f, me) = auth(c)
         if (epoch != f.epoch) fail(SyncError.Stale)
         sweep(f.id)
+        if (held() + data.length > ceiling) fail(SyncError.Limit)
         val b = blobs.getOrPut(f.id) { HashMap() }; val o = owed.getOrPut(f.id) { HashMap() }
         val m = blobMeta.getOrPut(f.id) { HashMap() }; val a = asks.getOrPut(f.id) { HashMap() }
         // all or nothing, like the SQL transaction (the cap check comes last)
@@ -210,6 +265,7 @@ class FakeRelay : Relay {
         return r("blobGet") {
             val (f, _) = auth(c)
             val d = blobs[f.id]?.get(id)?.takeIf { (blobMeta[f.id]?.get(id)?.expires ?: 0) > now() }
+            if (d != null) spend(f, d.length.toLong())
             if (d != null) corruptBlob?.invoke(d) ?: d else null
         }
     }
@@ -306,6 +362,9 @@ class FakeRelay : Relay {
         val (f, me) = admin(c)
         val q = f.requests.values.firstOrNull { it.invite == inviteId && it.status == "pending" && it.expires > now() } ?: fail(SyncError.InviteGone)
         val t = f.members[target]?.takeIf { it.status == "active" } ?: fail(SyncError.Refused)
+        // the creator's place only to the creator's own new phone; another admin's only when the caller did not make the invite
+        if (f.creator != null && f.creator == target && target != me.id) fail(SyncError.Refused)
+        if (t.role == "admin" && target != me.id) { val maker = f.invites[inviteId]?.by; if (maker == null || maker == me.id) fail(SyncError.Refused) }
         if (boxes.none { it.member == target }) fail(SyncError.BadData("target box"))
         val saved = Triple(t.hash, t.notice, t.has); val savedBoxes = f.boxes[target]?.let { HashMap(it) }
         val rep = target to t.hash
@@ -342,6 +401,7 @@ class FakeRelay : Relay {
         } else f.members[q.member] = Member(q.member, q.hash, q.notice, "member", "active", 0, ++joinOrder)
         f.boxes.getOrPut(q.member) { HashMap() }[epoch] = box
         f.members[q.member]!!.has = epoch
+        tidyBoxes(f)
         f.requests.values.removeIf { it.invite == inviteId }
         f.invites.remove(inviteId)
         Unit
@@ -453,11 +513,11 @@ class MemNotices : NoticeStore {
 }
 
 /** A phone: its book, its files and its engine, plus the write helpers the model would provide (stamp + dirty). */
-class Phone(val name: String, relay: Relay, pageSize: Int = 500) {
+class Phone(val name: String, relay: Relay, pageSize: Int = 500, powBits: Int = 8) {
     val book = MemBook(obj("v" to 1, "me" to obj("id" to "m-$name", "name" to name)))
     val files = MemFiles()
     val notices = MemNotices()
-    val engine = SyncEngine(relay, book, files, Dispatchers.Unconfined, pageSize = pageSize, pushChunk = 3, notices = notices)
+    val engine = SyncEngine(relay, book, files, Dispatchers.Unconfined, pageSize = pageSize, pushChunk = 3, notices = notices, powBits = powBits)
     val db get() = book.db
     val me get() = db.o("me").s("id")
     val view get() = engine.membership(db)
@@ -496,9 +556,12 @@ class Phone(val name: String, relay: Relay, pageSize: Int = 500) {
 
     fun rec(list: String, id: String): Obj? = db.objs(list).firstOrNull { it["id"] == id }
 
+    /** Answers "Share your existing entries?" after joining (true: Share all). */
+    fun share(yes: Boolean = true) = runBlocking { engine.answerShare(yes) }
+
     /** The shared part of the book in a comparable form: the four lists sorted by id, local-only fields dropped. */
     fun shared(): String = JsonCodec.stringify(obj(*listOf("loans", "payments", "files", "members").map { k ->
-        k to ArrayList<Any?>(db.objs(k).sortedBy { it.s("id") }.map { r -> r.copyObj().also { it.remove("enc") } })
+        k to ArrayList<Any?>(db.objs(k).sortedBy { it.s("id") }.map { r -> r.copyObj().also { it.remove("enc"); it.remove("sig") } })
     }.toTypedArray()))
 
     /** A fresh invite from this phone (it must be in a family). */

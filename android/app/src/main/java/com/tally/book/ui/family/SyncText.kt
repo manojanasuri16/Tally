@@ -60,6 +60,7 @@ object SyncText {
         SyncResult.Removed -> t("sync.removed", "You were removed from the family. Your entries stay on this phone.")
         SyncResult.Replaced -> t("sync.replaced", "This phone was replaced by a new phone. Your entries stay on this phone.")
         SyncResult.OldFamily -> oldFamilyText()
+        SyncResult.Ended -> t("sync.ended", "Sharing stopped because nobody else joined your family. Your entries stay on this phone.")
     }
 
     /**

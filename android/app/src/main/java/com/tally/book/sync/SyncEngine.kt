@@ -83,6 +83,11 @@ sealed class SyncResult {
     object Replaced : SyncResult() { override fun toString() = "Replaced" }
     /** The book has a family made by 0.1.0/0.2.0, which the relay no longer serves: leave it, then start or join again. */
     object OldFamily : SyncResult() { override fun toString() = "OldFamily" }
+    /**
+     * The relay no longer knows this family, which only this phone was ever in (nobody else joined, and it was not synced for 60
+     * days: tally_ping deletes such families). The family is forgotten here, every record kept; see [MembershipView.gone].
+     */
+    object Ended : SyncResult() { override fun toString() = "Ended" }
 }
 
 /** How "Ask for this file" went. */
@@ -112,6 +117,8 @@ class SyncEngine(
     private val pageSize: Int = 500,
     private val pushChunk: Int = 200,
     private val notices: NoticeStore = NoticeStore.None,
+    /** Zero bits the relay asks of the proof of work for a new family (the tally_hardening migration: 20). */
+    private val powBits: Int = 20,
 ) {
     private val lock = Mutex()
     private val _state = MutableStateFlow(SyncState())
@@ -142,7 +149,8 @@ class SyncEngine(
         val famId = Invite.newFamilyId()
         val (identity, secret, notice) = withContext(cpu) { Triple(SyncCrypto.newIdentity(), Membership.newCredential(), Membership.newCredential()) }
         val key = SyncCrypto.randomBytes(32)
-        relay.createFamily(famId, meId, SyncCrypto.tokenHash(secret), SyncCrypto.tokenHash(notice)).orStop()
+        val pow = withContext(cpu) { SyncCrypto.pow(famId, meId, powBits) }
+        relay.createFamily(famId, meId, SyncCrypto.tokenHash(secret), SyncCrypto.tokenHash(notice), pow).orStop()
         book.edit { db ->
             Membership.enter(db, famId, nm, meId, Membership.meObj(secret, notice, identity, Clock.millis()), mapOf(1 to key), "admin", emptyMap(), Clock.millis())
         }
@@ -398,9 +406,11 @@ class SyncEngine(
             // the new member's record, with the public key this phone checked, so every phone pins the right one
             val list = db.aa("members")
             val i = list.indexOfFirst { it.asObj()?.s("id") == c.request.memberId }
-            val rec = obj("id" to c.request.memberId, "name" to c.name, "pub" to Invite.b64url(c.pub), "invite" to requestId,
+            val pub = Invite.b64url(c.pub)
+            val rec = obj("id" to c.request.memberId, "name" to c.name, "pub" to pub, "invite" to requestId,
                 "at" to now.toDouble(), "updatedAt" to now.toDouble(), "updatedBy" to fam.myId)
-            if (i >= 0) list[i] = rec else list.add(rec)
+            Membership.cert(fam, c.request.memberId, pub)?.let { rec["cert"] = it }   // others pin this key only through it
+            if (i >= 0) { rec["updatedAt"] = SyncModel.stamp(list[i].asObj().num("updatedAt"), now); list[i] = rec } else list.add(rec)
             SyncModel.dirty(db)[c.request.memberId] = true
         }
         dropRequest(requestId)
@@ -420,6 +430,9 @@ class SyncEngine(
         var fam = book.read { Membership.famOf(it) } ?: return@exclusive noFamily()
         if (!fam.admin) return@exclusive SyncResult.Failed(SyncError.NotAdmin)
         if (!c.back) return@exclusive SyncResult.Failed(SyncError.Refused)
+        // the relay's rules (the tally_hardening migration), checked here too so nothing is sealed for a call that will be refused
+        if (reclaimBlocked(fam, target, c.invitedBy, book.read { Membership.adminIds(it) }) != null)
+            return@exclusive SyncResult.Failed(SyncError.Refused)
         var made: Pair<Int, ByteArray>? = null
         attempts@ for (attempt in 1..3) {
             val st = refreshState(fam)
@@ -451,8 +464,10 @@ class SyncEngine(
                 // the member's record carries the new key (and this invite), so phones that learn of them later pin the right one
                 val rec = db.objs("members").firstOrNull { it.s("id") == target }
                 if (rec != null) {
-                    rec["pub"] = Invite.b64url(c.pub); rec["invite"] = requestId; rec.remove("left")
-                    rec["updatedAt"] = now.toDouble(); rec["updatedBy"] = fam.myId
+                    val pub = Invite.b64url(c.pub)
+                    rec["pub"] = pub; rec["invite"] = requestId; rec.remove("left"); rec.remove("cert")
+                    Membership.cert(fam, target, pub)?.let { rec["cert"] = it }
+                    rec["updatedAt"] = SyncModel.stamp(rec.num("updatedAt"), now); rec["updatedBy"] = fam.myId
                     SyncModel.dirty(db)[target] = true
                 }
             }
@@ -469,6 +484,19 @@ class SyncEngine(
         book.edit { db -> db.o("family")!!.oo("usedInvites")[requestId] = true }
         dropRequest(requestId)
         refresh()
+    }
+
+    /**
+     * The answer to "Share your existing entries with <family>?" after this phone was let in: [share] true sends them with the
+     * next sync; false makes every one of them private ("Keep them on this phone only"), so they never leave this phone.
+     */
+    suspend fun answerShare(share: Boolean): SyncResult = exclusive {
+        book.edit { db ->
+            if (SyncModel.held(db) != null) {
+                if (share) SyncModel.shareHeld(db) else SyncModel.keepHeld(db, db.o("me").s("id"), Clock.millis())
+            }
+        }
+        runSync()
     }
 
     /**
@@ -533,6 +561,19 @@ class SyncEngine(
         runSync()
     }
 
+    /**
+     * Why the relay would refuse letting a phone back in as [target] when this phone ([fam]) approves (the tally_hardening
+     * migration), or null: "creator" when [target] made the family and is not this phone's own member (only the creator's own old
+     * phone can hand over that place); "invite" when [target] is an admin, is not this phone's member, and this phone's member
+     * made the invite (a second person must take part).
+     */
+    fun reclaimBlocked(fam: Membership.Fam, target: String, inviteMaker: String, admins: Set<String>): String? = when {
+        target == fam.myId -> null
+        fam.creator != null && fam.creator == target -> "creator"
+        target in admins && inviteMaker == fam.myId -> "invite"
+        else -> null
+    }
+
     /** Boxes for a new epoch [e] with [key]: one for each of [members] whose public key is pinned here (always this phone's own). */
     private fun rotationBoxes(fam: Membership.Fam, members: List<RelayMember>, e: Int, key: ByteArray, repins: Map<String, ByteArray> = emptyMap()): List<BoxFor> =
         members.mapNotNull { m ->
@@ -543,7 +584,7 @@ class SyncEngine(
 
     private fun markLeft(db: Obj, memberId: String, by: String) {
         val rec = db.objs("members").firstOrNull { it.s("id") == memberId } ?: return
-        rec["left"] = true; rec["updatedAt"] = Clock.millis().toDouble(); rec["updatedBy"] = by
+        rec["left"] = true; rec["updatedAt"] = SyncModel.stamp(rec.num("updatedAt"), Clock.millis()); rec["updatedBy"] = by
         SyncModel.dirty(db)[memberId] = true
     }
 
@@ -556,6 +597,12 @@ class SyncEngine(
 
     /** Runs [block] (a restore replacing the book) once no sync, create, join or leave is running, and with none starting meanwhile. */
     suspend fun <T> paused(block: suspend () -> T): T = lock.withLock { block() }
+
+    /**
+     * The app locked: forget the checked join requests, which hold their invites' secrets in memory (they are read again from the
+     * relay and checked anew after unlock). Never waits for a running sync.
+     */
+    fun forgetSecrets() { checked.clear(); _requests.value = emptyList(); lastPending = -1 }
 
     /** Forgets how the last sync ended (the book it was about has been replaced). */
     fun resetState() { _state.value = SyncState(); _requests.value = emptyList(); checked.clear(); lastPending = -1 }
@@ -610,6 +657,7 @@ class SyncEngine(
             when (e.error) {
                 SyncError.Removed -> gone()
                 SyncError.Replaced -> replaced()
+                SyncError.Unauthorised -> ended() ?: SyncResult.Failed(e.error)
                 else -> SyncResult.Failed(e.error)
             }
         } catch (e: SyncBook.SaveFailed) {
@@ -645,6 +693,25 @@ class SyncEngine(
         notices.update(null, 0)
         _requests.value = emptyList(); checked.clear()
         return SyncResult.Replaced
+    }
+
+    /**
+     * The relay does not know this phone's credentials. When only this phone was ever in the family (nobody else in the cached
+     * member list or in the book's members), the relay deleted it as a family of one nobody synced for 60 days: forget it, keep the
+     * records, say so once. Otherwise null (a wrong credential or a broken relay: nothing is forgotten).
+     */
+    private suspend fun ended(): SyncResult? {
+        val lonely = runCatching { book.read { db ->
+            val f = db.o("family") ?: return@read false
+            val me = db.o("me")?.s("id").orEmpty()
+            Membership.famOf(db) != null && db.o("joining") == null && f.objs("roster").all { it.s("id") == me } &&
+                db.objs("members").none { it.s("id") != me }
+        } }.getOrDefault(false)
+        if (!lonely) return null
+        runCatching { book.edit { db -> Membership.forget(db, "ended", Clock.millis()) } }
+        notices.update(null, 0)
+        _requests.value = emptyList(); checked.clear()
+        return SyncResult.Ended
     }
 
     private suspend fun noFamily(): SyncResult = if (book.read { Membership.isOld(it) }) SyncResult.OldFamily else SyncResult.NoFamily
@@ -729,15 +796,15 @@ class SyncEngine(
             val next = maxOf(cursor, rows.maxOf { it.seq })
             val outcome = book.edit { db ->
                 checkFamily(db, f)
-                val o = SyncModel.mergeRemote(db, opened.filterNotNull())
-                Membership.pinFromRecords(db)
+                val o = SyncModel.mergeRemote(db, opened.filterNotNull(), Membership.BookTrust(db), Clock.millis())
+                Membership.pinFromCerts(db)
                 Membership.ownRecordCarriesMyKey(db, Clock.millis())
                 SyncModel.syncOf(db)["cursor"] = next.toDouble()
                 o
             }
             outcome.filesRemoved.forEach { runCatching { files.delete(it) } }
             cursor = next; pulled += rows.size; skipped += opened.count { it == null }
-            if (rows.size < pageSize) break
+            // a page can be short because the relay caps its bytes (4 MiB): only an empty page is the end
         }
         fam = book.read { Membership.famOf(it) }!!
 
@@ -778,12 +845,13 @@ class SyncEngine(
         val waiting = fam.waitingForKey
         if (!waiting) {
             val f = fam
+            book.edit { db -> checkFamily(db, f); Membership.signOwnRecordOnce(db, Clock.millis()) }
             val items = book.read { SyncModel.collectPush(it) }
             val nothing = items.filter { !it.send }
             if (nothing.isNotEmpty()) book.edit { db -> checkFamily(db, f); SyncModel.afterPush(db, nothing) }
             val enc = f.encKey(f.relayEpoch)!!
             val sealed = withContext(cpu) {
-                items.filter { it.send }.map { it to SyncCrypto.sealE(enc, f.relayEpoch, it.json!!.toByteArray(Charsets.UTF_8), SyncCrypto.recordAad(f.id, it.id)) }
+                items.filter { it.send }.map { it to SyncCrypto.sealE(enc, f.relayEpoch, signed(f, it).toByteArray(Charsets.UTF_8), SyncCrypto.recordAad(f.id, it.id)) }
             }
             val fits = sealed.filter { it.second.length <= MAX_RECORD_BLOB }
             skipped += sealed.size - fits.size    // too large to send; stays dirty
@@ -861,7 +929,7 @@ class SyncEngine(
         checked.clear(); good.forEach { checked[it.request.inviteId] = it }
         val names = db0.objs("members").associate { it.s("id") to it.s("name") }
         _requests.value = good.map { c ->
-            JoinRequest(c.request.inviteId, c.name, c.invitedBy, names[c.invitedBy].orEmpty(), c.request.at, c.request.expiresAt, c.back)
+            JoinRequest(c.request.inviteId, c.name, c.invitedBy, names[c.invitedBy].orEmpty(), c.request.at, c.request.expiresAt, c.back, Membership.phoneCode(c.pub))
         }
     }
 
@@ -884,6 +952,19 @@ class SyncEngine(
         if (db.o("family")?.s("id") != fam.id) throw Stop(SyncError.BadData("the family changed during sync"))
     }
 
+    /**
+     * The envelope as it goes up, with who vouches for the record beside it: the signature it arrived with when this phone sends
+     * someone else's copy unchanged, otherwise this phone's own.
+     */
+    private fun signed(fam: Membership.Fam, item: SyncModel.PushItem): String {
+        val env = item.envelope!!.copyObj()
+        val r = env.o("r")!!
+        val stored = item.storedSig?.takeIf { item.writer.isNotEmpty() && item.writer != fam.myId && it.s("by").isNotEmpty() }
+        val sig = stored ?: Membership.signRecord(fam, item.kind, r)
+        if (sig != null) env["sig"] = sig
+        return JsonCodec.stringify(env)
+    }
+
     /** A pulled row opened and checked, or null: it must open under this family and id, and say the same kind and id inside. */
     private fun open(fam: Membership.Fam, row: RelayRow): SyncModel.WireRecord? {
         val text = SyncCrypto.openE({ fam.encKey(it) }, row.blob, SyncCrypto.recordAad(fam.id, row.id))?.let { String(it, Charsets.UTF_8) } ?: return null
@@ -891,7 +972,7 @@ class SyncEngine(
         val k = env["k"] as? String ?: return null
         val r = env.o("r") ?: return null
         if (k != row.kind || k !in SyncModel.LISTS || r["id"] != row.id) return null
-        return SyncModel.WireRecord(k, r)
+        return SyncModel.WireRecord(k, r, env.o("sig"))
     }
 
     companion object {

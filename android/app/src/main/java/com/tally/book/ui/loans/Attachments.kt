@@ -175,7 +175,10 @@ fun storeAll(ownerType: String, ownerId: String, list: List<Picked>) {
 }
 
 /** Marks files as deleted (the record stays as a tombstone so the delete can travel) and removes their bytes from this phone. */
-fun removeStored(ids: List<String>) {
+fun removeStored(all: List<String>) {
+    // in a family only the one who added a file (or its loan), or an admin, can delete it (the others' phones would keep it)
+    val ids = all.filter { id -> DB.objs("files").firstOrNull { it.s("id") == id }?.let { com.tally.book.sync.SyncModel.mayDeleteHere(DB, "file", it) } ?: true }
+    if (ids.size < all.size) DB.objs("files").firstOrNull { it.s("id") == all.first { a -> a !in ids } }?.let { f -> appScope.launch { Dialogs.tell(notYoursToDelete(f)) } }
     if (ids.isEmpty()) return
     Ledger.edit {
         ids.forEach { deleteFileRecord(it); DB.oo("sync").oo("blobsUp").remove(it) }

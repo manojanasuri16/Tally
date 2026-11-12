@@ -100,7 +100,7 @@ class SyncLiveTest {
         fun credOf(p: Phone) = Cred(p.db.o("family").s("id"), p.me, p.db.o("family").o("me").s("secret"))
         suspend fun owed(p: Phone) = (relay.files(credOf(p)) as RelayResult.Ok).value.owed
         val photo = ByteArray(2000) { (it * 7).toByte() }
-        val a = Phone("A", relay); val b = Phone("B", relay); val c = Phone("C", relay); val d = Phone("D", relay)
+        val a = Phone("A", relay, powBits = 20); val b = Phone("B", relay); val c = Phone("C", relay); val d = Phone("D", relay)
         a.loan("l1", "Live loan"); a.payment("p1", "l1", 10)
         note("A create -> ${a.engine.createFamily("Live files")}")
         cleanup.add(credOf(a))
@@ -156,7 +156,7 @@ class SyncLiveTest {
         val (ucode, utext) = raw("POST", "$url/rest/v1/rpc/tally_relay_usage", key, "{}")
         note("POST /rest/v1/rpc/tally_relay_usage -> $ucode $utext")
         assertEquals(200, ucode)
-        assertEquals(setOf("db_bytes", "limit_bytes", "percent", "blob_bytes"), JsonCodec.parseObj(utext).keys)
+        assertEquals(setOf("db_bytes", "limit_bytes", "percent", "blob_bytes", "record_bytes", "grew_24h_bytes"), JsonCodec.parseObj(utext).keys)
         val (pcode, ptext) = raw("POST", "$url/rest/v1/rpc/tally_ping", key, "{}")
         note("POST /rest/v1/rpc/tally_ping -> $pcode $ptext")
         assertEquals(200, pcode)
@@ -164,7 +164,7 @@ class SyncLiveTest {
 
     private suspend fun rejoin(relay: HttpRelay, url: String, key: String, cleanup: MutableList<Cred>) {
         fun credOf(p: Phone) = Cred(p.db.o("family").s("id"), p.me, p.db.o("family").o("me").s("secret"))
-        val a = Phone("A", relay); val b = Phone("B", relay)
+        val a = Phone("A", relay, powBits = 20); val b = Phone("B", relay)
         a.loan("l1", "Live loan")
         note("A create -> ${a.engine.createFamily("Live rejoin")}")
         cleanup.add(credOf(a))
@@ -196,6 +196,27 @@ class SyncLiveTest {
         assertEquals("m-B", a.rec("payments", "p2")!!.s("by"))
         assertEquals(a.shared(), b2.shared())
 
+        // M1: an admin cannot take the creator's place, nor another admin's with an invite the admin made itself
+        note("A makes B admin -> ${a.engine.setAdmin(b2.me, true)}; B syncs -> ${b2.sync()}")
+        val e = Phone("E", relay); e.db.o("me")!!["name"] = "A"
+        note("E asks back (as the creator?) with B's invite -> ${e.engine.requestJoin(b2.invite(), back = true)}")
+        val eInvite = e.db.o("joining").s("invite")
+        val asCreator = relay.reclaim(credOf(b2), eInvite, a.me, 3, listOf(BoxFor(a.me, "x"), BoxFor(b2.me, "x"))); note("admin B reclaims the creator -> $asCreator")
+        assertEquals(RelayResult.Err(SyncError.Refused), asCreator)
+        val ownInvite = Phone("F", relay)
+        note("F asks back with A's invite -> ${ownInvite.engine.requestJoin(a.invite(), back = true)}")
+        val fInvite = ownInvite.db.o("joining").s("invite")
+        val adminByMaker = relay.reclaim(credOf(a), fInvite, b2.me, 3, listOf(BoxFor(a.me, "x"), BoxFor(b2.me, "x"))); note("A reclaims admin B with A's own invite -> $adminByMaker")
+        assertEquals(RelayResult.Err(SyncError.Refused), adminByMaker)
+        // L5: a member sees only their own invites (C below is not yet a member; A's invite above is A's)
+        note("A deny E, F -> ${a.sync()}; ${a.engine.requests.value.map { it.name }}")
+        a.engine.requests.value.forEach { a.engine.deny(it.id) }
+        note("A demotes B -> ${a.engine.setAdmin(b2.me, false)}")
+        a.invite()
+        val stB = (relay.state(credOf(b2), 0) as RelayResult.Ok).value
+        note("member B sees invites by -> ${stB.invites.map { it.by }}")
+        assertTrue(stB.invites.all { it.by == b2.me })
+
         // a member cannot let anyone back; an unknown request says gone
         val c = Phone("C", relay); c.db.o("me")!!["name"] = "C"
         note("C asks back -> ${c.engine.requestJoin(b2.invite(), back = true)}")
@@ -223,11 +244,11 @@ class SyncLiveTest {
         val secret = Membership.newCredential(); val notice = Membership.newCredential()
         val me = Cred(fam, "m-live-a", secret)
         note("throwaway family: $fam")
-        val created = relay.createFamily(fam, me.memberId, SyncCrypto.tokenHash(secret), SyncCrypto.tokenHash(notice)); note("create -> $created")
+        val created = relay.createFamily(fam, me.memberId, SyncCrypto.tokenHash(secret), SyncCrypto.tokenHash(notice), SyncCrypto.pow(fam, me.memberId, 20)); note("create -> $created")
         assertEquals(RelayResult.Ok(Unit), created)
         cleanup.add(me)
-        assertEquals(RelayResult.Ok(Unit), relay.createFamily(fam, me.memberId, SyncCrypto.tokenHash(secret), null).also { note("create again, same creds -> $it") })
-        val hijack = relay.createFamily(fam, "m-evil", SyncCrypto.tokenHash("attacker"), null); note("create again, other member -> $hijack")
+        assertEquals(RelayResult.Ok(Unit), relay.createFamily(fam, me.memberId, SyncCrypto.tokenHash(secret), null, SyncCrypto.pow(fam, me.memberId, 20)).also { note("create again, same creds -> $it") })
+        val hijack = relay.createFamily(fam, "m-evil", SyncCrypto.tokenHash("attacker"), null, SyncCrypto.pow(fam, "m-evil", 20)); note("create again, other member -> $hijack")
         assertEquals(RelayResult.Err(SyncError.Unauthorised), hijack)
 
         val st = (relay.state(me, 0) as RelayResult.Ok).value
@@ -286,7 +307,7 @@ class SyncLiveTest {
         // ---- phones through the real relay
         TestClock.start()
         try {
-            val a = Phone("A", relay); val b = Phone("B", relay); val c = Phone("C", relay)
+            val a = Phone("A", relay, powBits = 20); val b = Phone("B", relay); val c = Phone("C", relay)
             a.loan("l1", "Live loan"); a.payment("p1", "l1", 1234); a.file("f1", "loan", "l1", byteArrayOf(5, 6, 7))
             val ra = a.engine.createFamily("Live test"); note("engine create -> $ra")
             val fa = a.db.o("family").s("id")

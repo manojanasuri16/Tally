@@ -72,23 +72,25 @@ object MemberText {
     }
 
     /**
-     * For a request from someone back on a new phone: the member it most likely is, to pre-select in the picker: the one whose
-     * name matches the name typed (ignoring case and spaces), else null (the admin picks). Never this phone's own member when
-     * another one matches.
+     * Why "Allow as <m>" cannot be done from this phone (the relay refuses it too), or null:
+     * the family's creator can only be moved by the creator's own old phone; another admin only when someone else made the invite
+     * the request came with, so that a second person takes part. Nobody is ever picked for the admin: the name typed in a request
+     * is not proof of anything (the review's M1).
      */
-    fun likelyMember(r: JoinRequest, members: List<FamilyMember>): FamilyMember? {
-        fun norm(s: String) = s.trim().lowercase().replace(Regex("\\s+"), " ")
-        val want = norm(r.name)
-        val same = members.filter { norm(it.name) == want }
-        return same.firstOrNull { !it.me } ?: same.firstOrNull()
+    fun allowAsBlocked(r: JoinRequest, m: FamilyMember, myId: String): String? = when {
+        m.me -> null
+        m.creator -> t("req.as.creator", "Only {name} can do this, from their old phone. If that phone is lost, let this phone in as someone new.", "name" to m.name)
+        m.admin && r.invitedById == myId -> t("req.as.secondPerson", "{name} is an admin. Because you made this invite, someone else must make a new one for them, or another admin must allow it.", "name" to m.name)
+        else -> null
     }
 
-    /** The question before "Allow as <name>". */
-    fun allowAsQuestion(name: String): String = t(
-        "req.as.ask",
-        "Let this phone become {name}?\n\n{name}'s old phone will stop working at once. Everything {name} added keeps their name.",
-        "name" to name,
-    )
+    /** The question before "Allow as <name>": the code to compare, and more care for an admin. */
+    fun allowAsQuestion(name: String, code: String = "", admin: Boolean = false): String {
+        val head = t("req.as.ask", "Let this phone become {name}?\n\n{name}'s old phone will stop working at once. Everything {name} added keeps their name.", "name" to name)
+        val check = if (code.isEmpty()) "" else "\n\n" + t("req.as.code", "Call {name} first and ask them to read the code on their new phone. It must be {code}. If it is not, choose Cancel.", "name" to name, "code" to code)
+        val more = if (admin) "\n\n" + t("req.as.admin", "{name} is an admin: this phone will be able to let people in and remove them.", "name" to name) else ""
+        return head + check + more
+    }
 
     /**
      * Whether to tell this phone's person, once, to make a second admin: they are the only admin and someone else is in the

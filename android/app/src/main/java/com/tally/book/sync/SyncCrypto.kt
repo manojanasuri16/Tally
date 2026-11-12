@@ -249,4 +249,47 @@ object SyncCrypto {
     }.getOrNull()
 
     fun openFile(encKey: ByteArray, familyId: String, fileId: String, blob: String): ByteArray? = open(encKey, blob, fileAad(familyId, fileId))
+
+    // ---------- signatures (ECDSA P-256, SHA-256) with a member's key ----------
+
+    /** An ECDSA signature (DER) over [data] with the member's private key, or null when the key is unusable. */
+    fun sign(privatePkcs8: ByteArray, data: ByteArray): ByteArray? = runCatching {
+        val s = java.security.Signature.getInstance("SHA256withECDSA")
+        s.initSign(privateKey(privatePkcs8) ?: return null)
+        s.update(data)
+        s.sign()
+    }.getOrNull()
+
+    /** True when [sig] is a valid signature over [data] by the P-256 key [spki]. */
+    fun verify(spki: ByteArray, data: ByteArray, sig: ByteArray): Boolean = runCatching {
+        val k = publicKey(spki) ?: return false
+        val s = java.security.Signature.getInstance("SHA256withECDSA")
+        s.initVerify(k)
+        s.update(data)
+        s.verify(sig)
+    }.getOrDefault(false)
+
+    // ---------- the proof of work for starting a family (the tally_hardening migration) ----------
+
+    /** True when SHA-256("tally-pow|<family>|<member>|<nonce>") begins with [bits] zero bits. */
+    fun powOk(family: String, member: String, nonce: String, bits: Int): Boolean {
+        val h = MessageDigest.getInstance("SHA-256").digest("tally-pow|$family|$member|$nonce".toByteArray(Charsets.UTF_8))
+        var left = bits; var i = 0
+        while (left >= 8) { if (h[i].toInt() != 0) return false; left -= 8; i++ }
+        return left == 0 || (h[i].toInt() and 0xff) ushr (8 - left) == 0
+    }
+
+    /** The first decimal nonce that satisfies [powOk] (the relay asks for 20 bits: about a million hashes). */
+    fun pow(family: String, member: String, bits: Int): String {
+        val md = MessageDigest.getInstance("SHA-256")
+        val prefix = "tally-pow|$family|$member|".toByteArray(Charsets.UTF_8)
+        var n = 0L
+        while (true) {
+            md.reset(); md.update(prefix); val h = md.digest(n.toString().toByteArray(Charsets.UTF_8))
+            var left = bits; var i = 0; var ok = true
+            while (left >= 8) { if (h[i].toInt() != 0) { ok = false; break }; left -= 8; i++ }
+            if (ok && (left == 0 || (h[i].toInt() and 0xff) ushr (8 - left) == 0)) return n.toString()
+            n++
+        }
+    }
 }

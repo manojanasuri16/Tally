@@ -83,12 +83,17 @@ object FamilyFlow {
         return false
     }
 
-    /** The join question: who invites (when the invite says) and the family's name, then what joining means. */
+    /**
+     * The join question: the family's name, who the link says sent it, and that both are only what the link says (anyone can make
+     * a link with any names: the review's M2), then what joining means. Nothing already on this phone is shared until the person
+     * answers a second question once they are in.
+     */
     fun joinQuestion(invite: Invite): String {
-        val body = t("join.body", "You will see this family's entries and payments, and they will see the ones you share.")
-        val head = invite.inviter?.let { t("join.askFrom", "{inviter} is inviting you to {name}. Join?", "inviter" to it, "name" to invite.name) }
-            ?: t("join.askName", "Join {name}?", "name" to invite.name)
-        return head + "\n\n" + body
+        val head = t("join.askName", "Join {name}?", "name" to invite.name)
+        val from = invite.inviter?.let { t("join.linkFrom", "The invite link says it is from {inviter}.", "inviter" to it) }
+        val check = t("join.linkCheck", "Tally can't check the names in a link. Join only if you know who sent it.")
+        val body = t("join.body2", "You will see this family's entries, and they will see the new ones you share. You choose later whether to share the entries already on this phone.")
+        return listOfNotNull(head, listOfNotNull(from, check).joinToString(" "), body).joinToString("\n\n")
     }
 
     /** The question for someone back on a new phone: an admin decides who they are, and their old phone stops working. */
@@ -183,14 +188,28 @@ object FamilyFlow {
         if (decided(r.id, result)) Dialogs.snack(t("req.allowed", "{name} is allowed in. Their phone joins in a moment.", "name" to r.name))
     }
 
-    /** Allow as <member>: someone back on a new phone takes [m]'s place (asks once; [m]'s old phone stops working). */
+    /** Allow as <member>: someone back on a new phone takes [m]'s place (asks once, naming [m]; [m]'s old phone stops working). */
     suspend fun allowAs(r: JoinRequest, m: FamilyMember) {
         val name = shownName(m)
-        if (!Dialogs.ask(MemberText.allowAsQuestion(name), t("req.allowAs", "Allow as {name}", "name" to name))) return
+        MemberText.allowAsBlocked(r, m, Sync.membership().myId)?.let { Dialogs.tell(it); return }
+        if (!Dialogs.ask(MemberText.allowAsQuestion(name, r.code, m.admin), t("req.allowAs", "Allow as {name}", "name" to name), danger = true)) return
         busy.value = t("req.allowing", "Letting them in…")
         val result = try { Sync.detached { Sync.engine.approveAs(r.id, m.id) } } finally { busy.value = null }
         if (result == SyncResult.Replaced) return                // this was the admin's own old phone: the Family page says so
         if (decided(r.id, result)) Dialogs.snack(t("req.allowedAs", "{name}'s new phone joins in a moment.", "name" to name))
+    }
+
+    /**
+     * The answer to "Share your existing entries with <family>?" (shown once this phone is let in): Share all, or Keep them on
+     * this phone only (they become private). Asks before keeping, since it changes every one of them.
+     */
+    suspend fun answerShare(share: Boolean) {
+        if (!share && !Dialogs.ask(
+                t("share.keep.ask", "Keep your earlier entries on this phone only?\n\nThey become private. You can share one later: open it, Edit, and turn off Keep private."),
+                t("share.keep.ok", "Keep them here"),
+            )) return
+        val r = Sync.detached { Sync.engine.answerShare(share) }
+        SyncText.message(r)?.let { Dialogs.snack(it) }
     }
 
     /** Don't allow: asks once, then tells the asking phone it was not let in. */

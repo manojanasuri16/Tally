@@ -39,6 +39,7 @@ class SyncRestoreTest {
         a.payment("p1", "l1", 23000)
         done(runBlocking { a.engine.createFamily("Home") })
         done(b.joinVia(a))
+        done(runBlocking { a.engine.setAdmin("m-B", true) })        // B deletes A's payment below: only its maker or an admin may
         a.file("f1", "payment", "p1", byteArrayOf(1, 2, 3, 4))
         done(a.sync()); done(b.sync())
     }
@@ -90,8 +91,10 @@ class SyncRestoreTest {
         listOf(a, b).forEach { assertTrue(it.name, it.db.o("sync").o("dirty")!!.isEmpty()) }
     }
 
-    @Test fun withoutTheRestoreMarkTheStalePrivateCopyWouldDeleteTheFamilysLoan() {
-        // why markRestored exists: the normal rule answers a newer row for a private record with a tombstone
+    @Test fun withoutTheRestoreMarkTheStalePrivateCopyNoLongerDeletesTheFamilysLoan() {
+        // why markRestored exists: the normal rule answers a newer row for a private record with a tombstone. Since the review's M3
+        // that tombstone is stamped before the family's newer copy and every other phone refuses it, so the family keeps the loan
+        // even without the mark (the restored phone itself still needs the mark to take the loan back)
         val a = Phone("A", relay); val b = Phone("B", relay)
         family(a, b)
         a.loan("lq", "Private then", private = true)
@@ -100,7 +103,8 @@ class SyncRestoreTest {
         lifeAfterTheBackup(a, b)
         a.book.db = snap.db.copyObj()                                      // restored, but not marked
         done(a.sync()); done(b.sync())
-        assertTrue(b.rec("loans", "lq")!!.b("deleted"))
+        assertFalse(b.rec("loans", "lq")!!.b("deleted"))
+        assertTrue(a.rec("loans", "lq")!!.b("private"))
     }
 
     @Test fun aFreshInstallRestoredFromABackupMatchesTheFamilyAndKeepsPrivateLoans() {

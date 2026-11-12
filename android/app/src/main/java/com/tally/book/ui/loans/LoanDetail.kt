@@ -90,6 +90,8 @@ private fun LoanBody(id: String, d: Detail) {
     }
     fun deleteIt() {
         scope.launch {
+            val rec = DB.objs("loans").firstOrNull { it.s("id") == id }
+            if (rec != null && !com.tally.book.sync.SyncModel.mayDeleteHere(DB, "loan", rec)) { Dialogs.tell(notYoursToDelete(rec)); return@launch }
             val ok = Dialogs.ask(
                 t("loan.delete.ask", "Delete this entry?\n\nIts payments and documents are deleted too. This cannot be undone."),
                 t("dlg.delete", "Delete"), danger = true,
@@ -317,8 +319,13 @@ private fun PaymentsGroup(d: Detail, given: Boolean, onEdit: (Obj) -> Unit) {
     }
 }
 
+/** In a family only the one who added an entry (or its loan), or an admin, can delete it: the others' phones would keep it. */
+internal fun notYoursToDelete(rec: Obj): String =
+    t("delete.notYours", "Only {name}, who added this, or a family admin can delete it.", "name" to memberName(rec.s("by")))
+
 /** Deletes a payment and offers Undo (the files' bytes are kept for a while so Undo can bring them back too). Always true: the row is gone. */
 internal suspend fun deletePaymentWithUndo(p: Obj): Boolean {
+    if (!com.tally.book.sync.SyncModel.mayDeleteHere(DB, "payment", p)) { Dialogs.tell(notYoursToDelete(p)); return false }
     val id = p.s("id")
     val snap = p.copyObj()
     val files = filesOf("payment", id).map { it.copyObj() }
