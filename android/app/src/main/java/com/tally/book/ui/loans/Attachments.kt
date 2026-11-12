@@ -24,7 +24,9 @@ import com.tally.book.core.*
 import com.tally.book.data.FileStore
 import com.tally.book.data.Ledger
 import com.tally.book.model.*
+import com.tally.book.sync.FileAsk
 import com.tally.book.sync.Sync
+import com.tally.book.sync.SyncModel
 import com.tally.book.ui.components.Dialogs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -225,19 +227,46 @@ object FileFetch {
 }
 
 /**
- * Opens a stored file in the phone's viewer. When its bytes are not on this phone yet (someone else added it) and there is a
- * family, they are fetched first with a visible "Getting the file…" state; if they are not there yet, say so plainly.
+ * The grey line under a stored file's name: its size when the bytes are on this phone, "Getting the file…" while they are being
+ * fetched, and otherwise where it is kept ("On <name>'s phone · <date added>", or "On your other phone"), never an error: the
+ * family's files pass through Tally's server only until everyone has them (docs/DESIGN.md "Files").
+ */
+@Composable
+fun storedFileLine(f: Obj): String {
+    val id = f.s("id")
+    if (FileFetch.isBusy(id)) return t("doc.getting", "Getting the file…")
+    if (FileStore.fileState(id) != "missing") return fileSizeLabel(f.num("size"))
+    val at = f.num("at").takeIf { it > 0 } ?: f.num("addedAt")
+    return FileAway.line(FileAway.where(f.s("by"), myId(), memberName(f.s("by"))), if (at > 0) fmtISODate(isoOfMillis(at)) else "")
+}
+
+/** Whether files added to [loan] go to the family: this phone shares with one and the loan is not private. */
+fun filesShared(loan: Obj?): Boolean = loan != null && !loan.b("private") && Sync.hasFamily() && !Sync.membership().oldFamily
+
+/**
+ * Opens a stored file in the phone's viewer. When its bytes are not on this phone (someone else added it, or this phone joined
+ * later or was restored without them) and there is a family, they are fetched first with a visible "Getting the file…" state.
+ * When the family's server no longer holds them, it says plainly where the file is kept and offers "Ask for this file".
  */
 suspend fun openStoredFile(ctx: Context, meta: Obj) {
     val id = meta.s("id")
     suspend fun read(): ByteArray = FileStore.readFileBytes(id)
     val bytes = try {
         try { read() } catch (e: FileStore.Fail) {
-            if (e.code != "missing" || !Sync.hasFamily()) throw e
+            if (e.code != "missing") throw e
             if (isBusyFetch(id)) return
-            FileFetch.busy.value = FileFetch.busy.value + id
-            val got = try { Sync.detached { Sync.engine.fetchFile(id) } } finally { FileFetch.busy.value = FileFetch.busy.value - id }
-            if (!got) { Dialogs.tell(t("doc.notYet", "This file is not here yet. Ask the family member who added it to open Tally, then try again.")); return }
+            val family = Sync.hasFamily()
+            val got = family && fetching(id) { Sync.engine.fetchFile(id) }
+            if (!got) {
+                val shared = family && !SyncModel.isPrivate(DB, "file", meta)
+                val by = meta.s("by")
+                val why = FileAway.explain(by, myId(), memberName(by), canAsk = shared)
+                if (!shared) { Dialogs.tell(why); return }
+                if (!Dialogs.ask(why, t("doc.away.ask", "Ask for this file"))) return
+                var result: FileAsk = FileAsk.Asked
+                val here = fetching(id) { Sync.engine.askForFile(id).also { result = it } == FileAsk.Here }
+                if (!here) { FileAway.afterAsk(result)?.let { Dialogs.snack(it) }; return }
+            }
             read()
         }
     } catch (e: FileStore.Fail) {
@@ -254,6 +283,12 @@ suspend fun openStoredFile(ctx: Context, meta: Obj) {
     MainActivity.holdLock = true
     runCatching { ctx.startActivity(Intent.createChooser(view, meta.s("name"))) }
         .onFailure { MainActivity.holdLock = false; Dialogs.tell(t("doc.err.noViewer", "This phone has no app that can open this file.")) }
+}
+
+/** Runs [block] in the app's own scope with [id] shown as "Getting the file…". */
+private suspend fun fetching(id: String, block: suspend () -> Boolean): Boolean {
+    FileFetch.busy.value = FileFetch.busy.value + id
+    return try { runCatching { Sync.detached { block() } }.getOrDefault(false) } finally { FileFetch.busy.value = FileFetch.busy.value - id }
 }
 
 // ---------- the pickers ----------

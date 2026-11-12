@@ -130,6 +130,7 @@ fun PaymentSheet(loanId: String, existing: Obj?, sms: String? = null, startKind:
 
             AttachedList(saved, removed, pending)
             InsetSurface { AttachButtons(pickers) }
+            if (filesShared(theLoan)) GroupFoot(FileAway.shareNote())
         }
         FormError(error, errorStamp)
     }
@@ -159,8 +160,9 @@ fun AttachedList(saved: List<Obj>, removed: MutableList<String>, pending: Mutabl
     InsetSurface {
         shown.forEachIndexed { i, f ->
             if (i > 0) Hairline(start = 16.dp)
-            // A saved file opens on a tap (fetching it first when a family member added it), so a receipt can be looked at again.
-            val sub = if (FileFetch.isBusy(f.s("id"))) t("doc.getting", "Getting the file…") else fileSizeLabel(f.num("size"))
+            // A saved file opens on a tap (fetching it first when a family member added it), so a receipt can be looked at again;
+            // one whose bytes are not on this phone says whose phone it is on (and a tap offers "Ask for this file").
+            val sub = storedFileLine(f)
             AttachedRow(f.s("name"), sub, isImage = fileFamily(f) == "image", thumb = null, onRemove = { removed.add(f.s("id")) },
                 onOpen = { scope.launch { openStoredFile(ctx, f) } })
         }

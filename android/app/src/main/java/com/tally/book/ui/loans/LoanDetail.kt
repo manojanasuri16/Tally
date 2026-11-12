@@ -121,11 +121,11 @@ private fun LoanBody(id: String, d: Detail) {
             RateChanges(loan, closed)
             PaymentsGroup(d, given, onEdit = { editingPayment = it })
 
-            AGroup(title = t("doc.title", "Documents")) {
+            AGroup(title = t("doc.title", "Documents"), footer = if (filesShared(loan)) FileAway.shareNote() else null) {
                 d.docs.forEach { f ->
                     item(Space60) {
                         ARow(
-                            f.s("name"), sub = if (FileFetch.isBusy(f.s("id"))) t("doc.getting", "Getting the file…") else fileSizeLabel(f.num("size")),
+                            f.s("name"), sub = storedFileLine(f),
                             icon = Icons.Rounded.Description, tint = Apple.colors.accent,
                             onClick = { scope.launch { openStoredFile(ctx, f) } },
                             trailing = {
