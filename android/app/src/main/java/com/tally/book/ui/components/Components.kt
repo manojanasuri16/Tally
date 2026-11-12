@@ -407,18 +407,26 @@ fun EditSheet(
     title: String, onDismiss: () -> Unit, onSave: (() -> Unit)?, saveLabel: String = t("dlg.save", "Save"),
     saveEnabled: Boolean = true, onDelete: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit,
 ) {
-    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // A form is not closed by a drag or a stray tap outside: Material's sheet dismissed after a short pull (or a pull while
+    // scrolling the form back to the top) and threw the typed entry away. The sheet refuses to hide unless X, Cancel or Back
+    // asked for it, so a drag springs back. It has no grabber, since it no longer drags. A sheet with nothing to save keeps both.
+    val form = onSave != null
+    val closing = remember { mutableStateOf(false) }
+    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { it != SheetValue.Hidden || !form || closing.value })
+    val close = { closing.value = true; onDismiss() }
     val haptics = rememberHaptics()
     val negative = LocalSemantic.current.negative
     ModalBottomSheet(
         // a tall sheet stops below the status bar: under it, the system takes the taps meant for Cancel and Save
         modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars.only(WindowInsetsSides.Top)),
         onDismissRequest = onDismiss, sheetState = state, containerColor = Apple.colors.elevated, shape = AppleShapes.sheet,
-        tonalElevation = 0.dp, scrimColor = Color.Black.copy(alpha = 0.35f), dragHandle = { Grabber() },
+        tonalElevation = 0.dp, scrimColor = Color.Black.copy(alpha = 0.35f),
+        dragHandle = if (form) ({ Spacer(Modifier.height(12.dp)) }) else ({ Grabber() }),
     ) {
+        if (form) androidx.activity.compose.BackHandler { close() }
         ElevatedLevel {
             Column(Modifier.fillMaxWidth().imePadding()) {
-                SheetHeader(title, onDismiss)
+                SheetHeader(title, close)
                 Column(
                     Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -429,7 +437,7 @@ fun EditSheet(
                         InsetSurface { ButtonRow(t("dlg.delete", "Delete"), negative, onDelete) }
                     }
                 }
-                if (onSave != null) SheetActions(saveLabel, saveEnabled, onCancel = onDismiss, onSave = { haptics.confirm(); onSave() })
+                if (onSave != null) SheetActions(saveLabel, saveEnabled, onCancel = close, onSave = { haptics.confirm(); onSave() })
             }
         }
     }
