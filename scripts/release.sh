@@ -24,7 +24,7 @@ export ANDROID_HOME="${ANDROID_HOME:-$HOME/android-sdk}"
 ( cd android && ./gradlew --console=plain assembleRelease )
 APK_SRC=android/app/build/outputs/apk/release/app-release.apk
 APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner"
-"$APKSIGNER" verify --print-certs "$APK_SRC" | grep -q "CN=Manoj Anasuri" || { echo "APK is not signed with the release key"; git checkout "$GRADLE_FILE"; exit 1; }
+"$APKSIGNER" verify --print-certs "$APK_SRC" | grep -q "CN=Tally" || { echo "APK is not signed with the release key"; git checkout "$GRADLE_FILE"; exit 1; }
 OUT="android/app/build/Tally-$VERSION.apk"
 cp "$APK_SRC" "$OUT"
 
