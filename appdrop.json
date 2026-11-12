@@ -10,5 +10,12 @@
   "visibility": "unlisted",
   "icon": "appdrop/icon.png",
   "descriptionFile": "appdrop/description.md",
-  "screenshots": []
+  "screenshots": [
+    "appdrop/screenshots/01-home.png",
+    "appdrop/screenshots/02-entry.png",
+    "appdrop/screenshots/03-payment.png",
+    "appdrop/screenshots/04-add.png",
+    "appdrop/screenshots/05-family.png",
+    "appdrop/screenshots/06-telugu.png"
+  ]
 }
