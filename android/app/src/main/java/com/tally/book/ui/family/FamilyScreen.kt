@@ -74,6 +74,7 @@ fun FamilyScreen() {
             MyNameGroup()
             LanguageGroup()
             LockGroup()
+            BackupGroup()
             PrivacyGroup()
             AGroup { item { ARow(t("app.version", "Version"), value = BuildConfig.VERSION_NAME) } }
         }

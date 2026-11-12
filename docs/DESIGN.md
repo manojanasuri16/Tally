@@ -16,7 +16,8 @@ It is a sibling of Balance (`~/Balance/android`, package `com.balance.ledger`) a
 - Log a payment against a loan: amount, date, what it was for (EMI, interest, principal), and optionally a note, a pasted bank SMS, and photos or documents.
 - Keep each loan's documents.
 - Family sync: pull down to refresh. Every loan and payment shows who entered it.
-- A loan is shared by default. A private loan, its payments and its files never leave the phone.
+- A loan is shared by default. A private loan, its payments and its files never leave the phone, except inside a backup file the person makes.
+- Backups: once a day into a folder on the phone (the newest 14 kept), Back up now through the share sheet, and Restore on a new phone.
 
 ## The local book
 
@@ -121,14 +122,64 @@ A file's bytes are fetched on first open (`SyncEngine.fetchFile`) with a visible
 
 Follows Balance's `android/UI.md` kit, simplified, plus the apple-design rules (press feedback on touch-down, critically damped springs, 1:1 pull to refresh with rubber-banding, sheets that leave the way they came).
 
-- **Welcome:** "What is your name?" → the book. Nothing else.
+- **Welcome:** "What is your name?" → the book. Below it, a quiet "I have a backup" link: pick the file → its PIN if it is locked → one question → the book is back.
 - **Loans (home):** total still owed, then "Due this month" (each row has a single Pay button), then the loans grouped by kind. One add button. Pull down to sync; a small line says when it last synced.
 - **Loan:** what is owed, next due date and amount, payments (newest first, each with who logged it), documents, Edit, Close loan.
 - **Add / edit loan (sheet):** kind first as three big choices; then only that kind's fields. "Keep private" toggle, off by default.
 - **Log payment (sheet):** amount (pre-filled with the EMI or interest due), date (today), kind, then optional: note, paste bank message, add photo, add document.
-- **Family:** `ui/family/`. With no family yet: a short explanation and two large choices, "Start sharing" (asks "Give your family a name", with a placeholder example and no default; Start stays off until something is typed) and "Join my family". In a family: the members ("You" on mine, "joined <date>"), Invite someone (a sheet with the QR, "Ask them to open Tally → Family → Join, and scan this", a Share button that sends the invite text through the system share sheet, and "Anyone with this code can join. Share it only with family."), Sync now with the last-synced time, and Leave family (asks; the records stay on this phone). Below, always: My name, Language (English, Telugu, Hindi), App lock (turn on, change, turn off, through `LockFlow`), Hide amounts, and the version.
+- **Family:** `ui/family/`. With no family yet: a short explanation and two large choices, "Start sharing" (asks "Give your family a name", with a placeholder example and no default; Start stays off until something is typed) and "Join my family". In a family: the members ("You" on mine, "joined <date>"), Invite someone (a sheet with the QR, "Ask them to open Tally → Family → Join, and scan this", a Share button that sends the invite text through the system share sheet, and "Anyone with this code can join. Share it only with family."), Sync now with the last-synced time, and Leave family (asks; the records stay on this phone). Below, always: My name, Language (English, Telugu, Hindi), App lock (turn on, change, turn off, through `LockFlow`), Backup (below), Hide amounts, and the version.
 - **Join (`family/join`):** "Scan the code" (a full-screen CameraX scanner, `family/scan`, ZXing decoding on a background thread; the camera permission is asked there, with "Paste the code instead" if it is refused) or a Paste button and field (the whole shared message may be pasted: `Invite.find` picks the link out of it). A valid invite always goes through "<Inviter> is inviting you to <family name>. Join?" (or "Join <family name>?" when the invite does not say who sent it; both names come from the invite) before anything is saved. An invite link that opens the app (`pendingInvite`) is taken after unlock and the welcome name, with the same question; if the phone is already in a family it says so and does nothing.
 - **Home:** pull down runs one sync and speaks only if it failed (one plain sentence) or if there is no family yet (offering "Set up"). The quiet line under the figure reads "Shared with family · synced 5 min ago", "Syncing…", "Not shared yet" (tap: Family) or "Couldn't sync · tap to retry".
+
+## Backups
+
+`data/BackupCore.kt` (plain JVM: make, check, put in place) and `data/Backups.kt` (the folder, WorkManager, the share sheet, the app's locks); on screen `ui/family/BackupFlow.kt`.
+
+### The file
+
+`Tally-YYYY-MM-DD.tally-backup`, a zip whose entries are all stored (not compressed):
+
+- `book.json`: the book exactly as stored on disk: plain JSON, or with a lock the sealed envelope `{ enc, s, i, d, t, l }`.
+- `files/<id>.bin` and `files/<id>.json`: every stored file and its record exactly as on disk (the original bytes, or with a lock AES-GCM under `DB.filesKey`, which is inside the sealed book). So a backup taken with a lock opens on a new phone with the PIN alone.
+- `manifest.json`, written last: `{ format: "tally-backup", version: 1, app, createdAt, date, sealed, counts?, skipped?, entries: [ { name, size, sha256 } ] }`. `counts` (`loans`, `payments`, `files`, tombstones not counted) only for a plain book.
+
+A backup copies what is on disk, so it needs no secret and runs while the app is locked or not running. It is taken under `FileStore.filesExclusive` (no lock pass or downloaded file meanwhile), each record read under `FileStore.io` and the book under the ledger's disk lock, so it never copies a half-written file (AtomicFile on Android 10 rewrites in place behind a `.bak`; a `.bak` left by a crash is read as the good copy). An open book is saved first.
+
+Not in a backup: anything device-only (language, the backup folder and its state, fingerprint unlock, the re-lock delay copy in `DevicePrefs`, WorkManager's own records). Everything in the book is: loans, payments, private loans, files, `me`, `family` (including its key) and `sync`.
+
+Without a lock the file is plain and contains the family's key: the Backup group's footer and the share question say so in one line ("anyone who gets this file can read your loans and join your family").
+
+### Daily, and Back up now
+
+- "Back up every day" asks for a folder once (`ACTION_OPEN_DOCUMENT_TREE`, a persisted permission kept in `DevicePrefs`; no storage permission, no account, no network). A WorkManager periodic job runs once a day, and on every app open a one-off job runs if the last backup that worked is more than 24 hours old (battery savers delay workers). At most one a day: a second backup the same day replaces that day's file. The file is written as `….tally-backup.partial` and renamed when complete; then the folder keeps the newest 14 files with Tally's own name and touches nothing else.
+- A folder that is gone or no longer allowed sets "stopped": the Backup group and a quiet line on the home screen say "Backup stopped: choose the folder again". Another failure shows "It did not work last time" and tries again next time.
+- "Back up now" saves into the folder (when one is chosen), makes the file in the app's cache and, after one question, opens the share sheet (Drive, WhatsApp, email). The cache copy is deleted at the next start.
+
+### Restore
+
+From the Family page ("Restore from a backup") or the welcome screen ("I have a backup"):
+
+1. The picked file is copied into the cache (at most 2 GB) and checked completely before anything changes: a zip; only the names above (no folders, paths, traversal, duplicates); manifest format and version 1 (a newer version says "update Tally first"); every entry listed with the right size and SHA-256 and every listed entry present; caps (manifest 8 MB, book 64 MB, a file 16 MB, 20 000 entries); a book that is a Tally book or an envelope, as the manifest says.
+2. Sealed: the PIN is asked (the lock screen's "sealed file" stage) and checked against the backup's envelope without touching the current lock.
+3. One question (`Dialogs.ask(…, danger = true)`) with the backup's date, its loans and what is replaced, and the one limit: shared loans and payments the family deleted since stay deleted. A restore is not an undo for the family.
+4. With the sync engine paused, the files lane held and saving frozen: the current book and files are written as the one safety copy (`filesDir/restore/before-restore.tally-backup`, replacing the last); the backup is unpacked into staging (hashes checked again); a journal marks it complete; the files folder and the book are swapped in. A failure before the swap changes nothing; a process that dies during the swap finishes it at the next start (`Backups.init`, before anything is read). The book is started fresh (`Ledger.start`) with the lock set as below, still inside the lane.
+5. "Undo the last restore" puts the safety copy back the same way (its PIN if it was locked) and then deletes it.
+
+The lock after a restore:
+
+| Backup | Phone before | After |
+|---|---|---|
+| locked | no lock | locked with the backup's PIN |
+| locked | locked | locked with the backup's PIN (fingerprint unlock is turned off; the app says so) |
+| plain | no lock | no lock |
+| plain | locked | stays locked with the phone's own PIN: the book is sealed with it as it is written, and the lock pass seals the files. Restoring must never silently remove a lock the person set. |
+| undo | any | exactly as before the restore (locked with that PIN, or unlocked) |
+
+### Restore and sync
+
+The restored book keeps its `sync` (cursor, dirty marks, `pushed`, `blobsUp`), so the next sync pulls everything the family wrote since the backup's cursor and the normal rules apply: records the phone had not changed take the family's copy; edits still dirty in the backup meet the family's by last writer; deletions stay; a file whose bytes are not here is fetched as usual.
+
+One case needs more: a loan that was private in the backup but shared since (by this phone, before the restore). The normal rule would answer the family's newer copy with a tombstone and delete the loan on every phone. So a restore sets `sync.restored`, and until the next complete sync a pulled row that is newer than a private copy here (loan, payment or file) is taken. Covered by `SyncRestoreTest`. Limits: a loan made private after the backup comes back as the family's tombstone (it was deleted for them); the same backup restored on two phones at once makes them one member.
 
 ## Not in version 1
 

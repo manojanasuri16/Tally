@@ -16,6 +16,8 @@ import com.tally.book.sync.Sync
 import com.tally.book.ui.components.Dialogs
 import com.tally.book.ui.components.pressDim
 import com.tally.book.ui.components.rememberLedger
+import com.tally.book.ui.loans.backupLine
+import com.tally.book.ui.loans.restorePicker
 import com.tally.book.ui.loans.syncHook
 import com.tally.book.ui.loans.syncStatusLine
 import com.tally.book.ui.theme.Apple
@@ -28,6 +30,8 @@ import kotlinx.coroutines.delay
 fun installSyncHooks() {
     syncHook = { pullToRefresh() }
     syncStatusLine = { SyncStatusLine() }
+    backupLine = { BackupHomeLine() }
+    restorePicker = { rememberRestorePicker() }
 }
 
 /** Pull down on the home screen. Silent when it worked; one plain sentence when it did not, or an offer to set sharing up. */

@@ -12,7 +12,7 @@ It is a sibling of Balance (`~/Balance/android`), whose foundation it copies (co
 
 - **Never change** the `applicationId` (`com.tally.book`) or the release key (`TALLY_STORE_*` in `~/.gradle/gradle.properties`, never committed).
 - **`versionCode` goes up every release.**
-- **Privacy:** only the sync relay is contacted, and only ciphertext leaves the phone. `allowBackup="false"` stays. A private loan, its payments and its files never leave the phone.
+- **Privacy:** only the sync relay is contacted, and only ciphertext leaves the phone. `allowBackup="false"` stays. A private loan, its payments and its files never leave the phone, except inside a backup file the person makes.
 - **The book is a JSON tree, not data classes.** `DB` is `Obj`/`Arr` with every number a `Double`, and unknown fields round-trip untouched.
 - **Every persisted change goes through `Ledger.edit { }`.** Screens read with `val rev = rememberLedger()` and `remember(rev) { ... }`. Reading `DB` is observed by Compose (`onDbRead`).
 - **Nothing is saved until the user saves it.** A form edits a copy held in `remember` and writes inside `Ledger.edit {}` on Save. New ids come from `uid(prefix)`.
@@ -29,6 +29,7 @@ It is a sibling of Balance (`~/Balance/android`), whose foundation it copies (co
   - The wire envelope `{ k, r }`, the blob format (version byte 1) and the AAD strings are a protocol between phones on different versions: change them only with a new version byte and a reader for the old one.
 - **The invite text** (`tally://join#...`) is shown only inside the Invite sheet and handed to the system share sheet. Never put it in a snack, a dialog, a log, a crash message or saved state (`rememberSaveable`); the join confirmation shows only the family name and the inviter's name parsed from it. The camera scanner and the Join field pass it straight to `Invite.find`.
 - **UI words about sharing** are "family", "share", "join". Never "relay", "key" or "encrypt" on screen, apart from the one line "Only your family can read what you share."
+- **Backups** (`docs/DESIGN.md` "Backups"): the `.tally-backup` format is version 1 (`BackupFormat.VERSION`); a change to it is a new version with a reader for the old one. The book and files go in exactly as stored on disk (sealed when locked), never decrypted, re-encoded or compressed. Device-only settings (`DevicePrefs`: language, the backup folder, fingerprint) are never in a backup. A restore checks everything before touching anything, keeps one safety copy, swaps in behind a journal, never removes a lock the person set, and marks the book `sync.restored`. A backup reads the book only through `Ledger.readStoredBytes()` and the files under `FileStore.filesExclusive` + `FileStore.io`; any new writer of the book or files holds those locks too.
 - **Design follows `android/UI.md`.** Never use Material tab or chip rows for navigation. One root screen, pushed sub-screens, forms in sheets with Cancel and Save pinned.
 
 ## Map
@@ -38,10 +39,11 @@ android/app/src/main/java/com/tally/book/
   MainActivity.kt: pendingSharedText and pendingInvite stashes; TallyApplication.kt
   core/        Js helpers (n, inr, obj, arr...), JsonCodec, I18n, DevicePrefs, Clock + dates (Util)
   model/       Db (DB, onDbRead), Book (freshDb), State (reset), Hooks (UiHooks), FileMeta
-  data/        Ledger (load/lock/save), Crypto, Files (FileStore)
+  data/        Ledger (load/lock/save), Crypto, Files (FileStore), BackupCore (the backup file: make, check, install; plain JVM),
+               Backups (folder, daily WorkManager job + catch-up, share file, install under the app's locks; BackupWorker)
   sync/        family sync: SyncCrypto (HKDF, seal/open), Invite, Relay (+ HttpRelay), SyncModel (pure merge/push rules), SyncEngine, Sync (app wiring)
   ui/          App.kt (Routes, AppNav, shell, SubScreen), theme/, components/ (the kit + Qr + PullRefresh), lock/,
-               family/ (FamilyScreen + Join + familyGraph, QrScanner + QrDecoder (CameraX + ZXing), FamilyFlow (create/join/leave, "please wait"),
+               family/ (FamilyScreen + Join + familyGraph, QrScanner + QrDecoder (CameraX + ZXing), FamilyFlow (create/join/leave, "please wait"), BackupFlow (Backup group, restore/undo flow, BackupText, home "stopped" line),
                SyncWiring (pull to refresh + status line), SyncText (pure words for sync: ago, errors, status)),
                loans/ (LoansScreen + Welcome + loansGraph, LoanDetail, LoanSheet, PaymentSheet, Attachments (photos, documents, FileStore glue),
                FormBits, Words (plain words, and `loanWords(given)`: the one place wording turns around for money I gave), SyncHooks (syncHook, syncStatusLine))

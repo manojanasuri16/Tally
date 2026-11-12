@@ -84,5 +84,7 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.zxing.core)
+    // The daily backup into the folder the person picked (data/Backups.kt).
+    implementation(libs.androidx.work.runtime)
     testImplementation(libs.junit)
 }

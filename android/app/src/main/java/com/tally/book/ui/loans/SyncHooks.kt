@@ -15,3 +15,9 @@ var syncHook: (suspend () -> Unit)? = null
 
 /** A small line shown under the figure on the home screen ("Synced just now"). Backed by state, so setting it redraws the screen. */
 var syncStatusLine: (@Composable () -> Unit)? by mutableStateOf(null)
+
+/** A quiet line on the home screen when daily backup has stopped ("Backup stopped: choose the folder again"); draws nothing otherwise. */
+var backupLine: (@Composable () -> Unit)? by mutableStateOf(null)
+
+/** Opens the file picker for "I have a backup" on the welcome screen and restores the picked file. */
+var restorePicker: (@Composable () -> (() -> Unit))? = null

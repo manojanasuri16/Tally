@@ -13,6 +13,7 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.tally.book.core.*
+import com.tally.book.data.Backups
 import com.tally.book.data.Crypto
 import com.tally.book.data.Ledger
 import com.tally.book.model.DB
@@ -112,6 +113,8 @@ class MainActivity : FragmentActivity() {
         // a file picker or share sheet the app itself opened is not "leaving the app"
         val own = holdLock; holdLock = false
         if (stoppedAt > 0 && Crypto.locked && away > limit && !own) Ledger.relock()
+        // daily backup: a job that a battery saver held back runs now; a folder that went away is noticed
+        Backups.catchUp()
     }
 
     override fun onStop() {

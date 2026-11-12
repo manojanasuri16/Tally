@@ -82,6 +82,7 @@ fun WelcomeScreen() {
     var name by remember { mutableStateOf("") }
     val haptics = rememberHaptics()
     val question = t("welcome.name", "What is your name?")
+    val restore = restorePicker?.invoke()
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).windowInsetsPadding(WindowInsets.safeDrawing)) {
         Column(Modifier.align(Alignment.Center).widthIn(max = 480.dp).padding(horizontal = 24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             Text(question, style = Apple.type.title1, color = Apple.colors.label, modifier = Modifier.semantics { contentDescription = question })
@@ -90,6 +91,8 @@ fun WelcomeScreen() {
                 haptics.confirm()
                 Ledger.edit { setMyName(name) }
             }, Modifier.fillMaxWidth(), enabled = name.isNotBlank())
+            // a new phone: bring the book back instead of starting again
+            if (restore != null) PlainButton(t("welcome.haveBackup", "I have a backup"), restore, Modifier.align(Alignment.CenterHorizontally))
         }
     }
 }
@@ -145,6 +148,7 @@ fun LoansScreen() {
                 ) {
                     if (!home.any) {
                         EmptyState(t("home.empty", "No loans yet. Add one to start keeping track."), icon = Icons.Rounded.Group)
+                        backupLine?.invoke()
                     } else {
                         HomeHero(home)
                         if (home.hasTaken) DueSection(home.due, onPay = { id, k -> payFor = PayFor(id, k) }, onOpen = { openLoan(it) })
@@ -183,6 +187,7 @@ private fun HomeHero(home: Home) {
     }
     val line = syncStatusLine
     if (line != null) Box(Modifier.padding(start = 4.dp)) { line() }
+    backupLine?.invoke()
 }
 
 @Composable
