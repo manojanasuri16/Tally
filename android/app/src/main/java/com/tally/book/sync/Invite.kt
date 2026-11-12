@@ -5,29 +5,43 @@ import java.nio.charset.CodingErrorAction
 import java.util.Base64
 
 /*
- * The invite (docs/DESIGN.md, "Invite"):  tally://join#<familyId>.<base64url(key)>.<base64url(familyName)>[.<base64url(inviterName)>]
+ * The invite (docs/DESIGN.md, "Invite"): a one-time code that lets someone ASK to join. It never contains a family key.
  *
- * - familyId: 16 random bytes, base64url without padding (22 characters). It gates a public endpoint, so it is random,
- *   not a uid().
- * - key: the 32-byte family key, base64url without padding (43 characters).
- * - name: the family's name as UTF-8, base64url without padding.
- * - inviter: optional, the name of the person inviting (their DB.me.name), same encoding and limits as the name. Invites made
- *   by 0.1.0 have three parts and no inviter.
- * Everything after '#' is a URL fragment, which is never sent to a server.
+ *   tally://join#t2.<familyId>.<secret>.<expires>.<base64url(familyName)>[.<base64url(inviterName)>]
  *
- * Parsing is strict: anything malformed (wrong scheme, extra parts, padding, non-canonical base64, a key that is not 32
- * bytes, a name or inviter that is not valid UTF-8 or is empty or too long) gives null.
+ * - familyId: 16 random bytes, base64url without padding (22 characters).
+ * - secret: 32 random bytes made for this invite only, base64url (43 characters). It never reaches the relay. From it:
+ *     inviteId   = base64url(HKDF(secret, "tally-invite-id", 16))   the name the relay knows the invite by
+ *     requestKey = HKDF(secret, "tally-join-req")                    seals the joiner's request (name, public key)
+ *     grantKey   = HKDF(secret, "tally-grant")                       the admin's MAC over the keys it gives the joiner
+ *   so the relay can neither read a request, nor forge one, nor forge the admin's answer: only people who saw the code
+ *   (and the family's members, who get the secret sealed under the family key) hold it.
+ * - expires: when the invite stops working, epoch seconds in decimal (the relay enforces its own 24 hours too).
+ * - name / inviter: as in version 1: the family's name and the inviting person's name, UTF-8, 1 to 80 characters.
+ * Everything after '#' is a URL fragment, never sent to a server.
+ *
+ * Invites made by 0.1.0 / 0.2.0 (`tally://join#<familyId>.<key>.<name>[.<inviter>]`) are not accepted: [isOld] recognises
+ * them so the app can say "ask for a new code". Parsing is strict: anything malformed gives null.
  */
-class Invite(val familyId: String, val key: ByteArray, val name: String, val inviter: String? = null) {
-    override fun equals(other: Any?) = other is Invite && other.familyId == familyId && other.key.contentEquals(key) && other.name == name && other.inviter == inviter
+class Invite(val familyId: String, val secret: ByteArray, val expiresAt: Long, val name: String, val inviter: String? = null) {
+    /** The id the relay knows this invite by. */
+    val inviteId: String get() = idOf(secret)
+
+    /** True once the invite's own expiry has passed (the relay may refuse it earlier: used, cancelled). */
+    fun expired(nowMs: Long): Boolean = nowMs >= expiresAt
+
+    override fun equals(other: Any?) = other is Invite && other.familyId == familyId && other.secret.contentEquals(secret) &&
+        other.expiresAt == expiresAt && other.name == name && other.inviter == inviter
     override fun hashCode() = familyId.hashCode()
-    override fun toString() = "Invite($familyId, <key>, $name, $inviter)"
+    override fun toString() = "Invite($familyId, <secret>, $expiresAt, $name, $inviter)"
 
     companion object {
         const val PREFIX = "tally://join#"
+        private const val TAG = "t2"
         const val MAX_NAME = 80
         private val B64URL = Regex("^[A-Za-z0-9_-]+$")
         private val FAMILY_ID = Regex("^[A-Za-z0-9_-]{22}$")
+        private val EXPIRES = Regex("^[1-9][0-9]{0,11}$")
         private val enc = Base64.getUrlEncoder().withoutPadding()
 
         fun b64url(b: ByteArray): String = enc.encodeToString(b)
@@ -44,8 +58,12 @@ class Invite(val familyId: String, val key: ByteArray, val name: String, val inv
         /** A new random family id. */
         fun newFamilyId(): String = b64url(SyncCrypto.randomBytes(16))
 
-        /** A new random family key. */
-        fun newKey(): ByteArray = SyncCrypto.randomBytes(32)
+        /** A new random invite secret. */
+        fun newSecret(): ByteArray = SyncCrypto.randomBytes(32)
+
+        fun idOf(secret: ByteArray): String = b64url(SyncCrypto.hkdfInfo(secret, "tally-invite-id", 16))
+        fun requestKey(secret: ByteArray): ByteArray = SyncCrypto.hkdfInfo(secret, "tally-join-req")
+        fun grantKey(secret: ByteArray): ByteArray = SyncCrypto.hkdfInfo(secret, "tally-grant")
 
         fun cleanName(name: String): String? {
             val t = name.trim()
@@ -57,32 +75,39 @@ class Invite(val familyId: String, val key: ByteArray, val name: String, val inv
         fun inviterName(name: String?): String? =
             name?.filterNot { it.isISOControl() }?.trim()?.take(MAX_NAME)?.trim()?.takeIf { it.isNotEmpty() }
 
-        /**
-         * The invite text, or an IllegalArgumentException for a bad id, key or name. [inviter] is the inviting person's name; a blank
-         * one is left out (a three-part invite), a long one is shortened to [MAX_NAME] characters.
-         */
-        fun make(familyId: String, key: ByteArray, name: String, inviter: String? = null): String {
+        /** The invite text, or an IllegalArgumentException for a bad id, secret, expiry or name. A blank inviter is left out. */
+        fun make(familyId: String, secret: ByteArray, expiresAt: Long, name: String, inviter: String? = null): String {
             require(isFamilyId(familyId)) { "bad family id" }
-            require(key.size == 32) { "bad key" }
+            require(secret.size == 32) { "bad secret" }
+            val secs = expiresAt / 1000
+            require(EXPIRES.matches(secs.toString())) { "bad expiry" }
             val nm = requireNotNull(cleanName(name)) { "bad name" }
             val by = inviterName(inviter)
-            return PREFIX + familyId + "." + b64url(key) + "." + b64url(nm.toByteArray(Charsets.UTF_8)) +
+            return PREFIX + TAG + "." + familyId + "." + b64url(secret) + "." + secs + "." + b64url(nm.toByteArray(Charsets.UTF_8)) +
                 (if (by != null) "." + b64url(by.toByteArray(Charsets.UTF_8)) else "")
         }
 
-        fun make(invite: Invite): String = make(invite.familyId, invite.key, invite.name, invite.inviter)
+        fun make(invite: Invite): String = make(invite.familyId, invite.secret, invite.expiresAt, invite.name, invite.inviter)
 
-        /**
-         * The invite inside [text], which may be a whole shared message ("Join our family in Tally: tally://join#...") or a
-         * link someone pasted with other words around it. The invite itself is still parsed strictly.
-         */
-        fun find(text: String?): Invite? {
+        /** The link inside [text] (a whole shared message, or a link with words around it), or null. */
+        private fun linkIn(text: String?): String? {
             val s = text ?: return null
             val at = s.indexOf(PREFIX)
             if (at < 0) return null
             var end = at
             while (end < s.length && !s[end].isWhitespace()) end++
-            return parse(s.substring(at, end))
+            return s.substring(at, end)
+        }
+
+        /** The invite inside [text], which may be a whole shared message. The invite itself is still parsed strictly. */
+        fun find(text: String?): Invite? = linkIn(text)?.let { parse(it) }
+
+        /** True when [text] holds an invite in the format of 0.1.0/0.2.0 (it carried the family key; no longer accepted). */
+        fun isOld(text: String?): Boolean {
+            val s = linkIn(text) ?: return false
+            if (s.length > MAX_TEXT) return false
+            val parts = s.substring(PREFIX.length).split('.')
+            return (parts.size == 3 || parts.size == 4) && isFamilyId(parts[0]) && unb64url(parts[1])?.size == 32
         }
 
         /** The invite in [text] (surrounding whitespace allowed, nothing else), or null. */
@@ -90,13 +115,16 @@ class Invite(val familyId: String, val key: ByteArray, val name: String, val inv
             val s = text?.trim() ?: return null
             if (s.length > MAX_TEXT || !s.startsWith(PREFIX)) return null
             val parts = s.substring(PREFIX.length).split('.')
-            if (parts.size != 3 && parts.size != 4) return null
-            val id = parts[0]
+            if (parts.size != 5 && parts.size != 6) return null
+            if (parts[0] != TAG) return null
+            val id = parts[1]
             if (!isFamilyId(id)) return null
-            val key = unb64url(parts[1])?.takeIf { it.size == 32 } ?: return null
-            val name = nameOf(parts[2]) ?: return null
-            val inviter = if (parts.size == 4) (nameOf(parts[3]) ?: return null) else null
-            return Invite(id, key, name, inviter)
+            val secret = unb64url(parts[2])?.takeIf { it.size == 32 } ?: return null
+            if (!EXPIRES.matches(parts[3])) return null
+            val exp = parts[3].toLongOrNull() ?: return null
+            val name = nameOf(parts[4]) ?: return null
+            val inviter = if (parts.size == 6) (nameOf(parts[5]) ?: return null) else null
+            return Invite(id, secret, exp * 1000, name, inviter)
         }
 
         /** The longest invite text accepted: two names of 80 characters in a script that takes 3 UTF-8 bytes each still fit. */

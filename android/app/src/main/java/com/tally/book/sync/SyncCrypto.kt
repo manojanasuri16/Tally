@@ -1,9 +1,19 @@
 package com.tally.book.sync
 
+import java.security.KeyFactory
+import java.security.KeyPairGenerator
 import java.security.MessageDigest
+import java.security.PrivateKey
+import java.security.PublicKey
 import java.security.SecureRandom
+import java.security.interfaces.ECPublicKey
+import java.security.spec.ECGenParameterSpec
+import java.security.spec.ECParameterSpec
+import java.security.spec.PKCS8EncodedKeySpec
+import java.security.spec.X509EncodedKeySpec
 import java.util.Base64
 import javax.crypto.Cipher
+import javax.crypto.KeyAgreement
 import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -19,6 +29,15 @@ import javax.crypto.spec.SecretKeySpec
  * The version byte is also bound into the GCM additional data, so it cannot be swapped without detection.
  * Record AAD "tally:<familyId>:<recordId>", file AAD "tally-file:<familyId>:<fileId>": a blob only opens under the
  * family and id it was sealed for.
+ *
+ * Version 2 (docs/DESIGN.md, "Keys and epochs"): the family has a keyring of (epoch, key); a v2 blob is
+ *   base64(2 || epoch (4 bytes, big-endian) || iv(12) || ciphertext || tag(16)), the 5-byte header fed to GCM ahead of the AAD,
+ * and encKey = HKDF(key of that epoch, "tally-enc"). Version 1 blobs (one key, no epoch) are still opened by [open].
+ *
+ * Sealing to a member (key boxes): ECIES over P-256. An ephemeral key pair, ECDH with the recipient's public key,
+ * HKDF-SHA256(Z, salt = ephemeral SPKI || recipient SPKI, info = "tally-box-v1|" + context), AES-256-GCM with the context as
+ * AAD. Blob: base64(1 || ephemeral SPKI (91 bytes) || iv(12) || ciphertext || tag). It hides the contents from the relay;
+ * who sent it is proved inside, by a MAC under a key only family members (or the invite's holders) have (sync/Membership.kt).
  */
 object SyncCrypto {
     const val VERSION: Int = 1
@@ -106,6 +125,128 @@ object SyncCrypto {
         open(encKey, blob, recordAad(familyId, recordId))?.let { String(it, Charsets.UTF_8) }
 
     fun sealFile(encKey: ByteArray, familyId: String, fileId: String, bytes: ByteArray): String = seal(encKey, bytes, fileAad(familyId, fileId))
+
+    // ---------- version 2: a keyring with epochs ----------
+
+    const val VERSION_EPOCH: Int = 2
+    private const val V2_HEAD = 5
+
+    private fun v2Header(epoch: Int): ByteArray =
+        byteArrayOf(VERSION_EPOCH.toByte(), (epoch ushr 24).toByte(), (epoch ushr 16).toByte(), (epoch ushr 8).toByte(), epoch.toByte())
+
+    /** base64(2 || epoch || iv || ciphertext+tag) under the encKey of that epoch. */
+    fun sealE(encKey: ByteArray, epoch: Int, plain: ByteArray, aad: ByteArray): String {
+        require(epoch >= 1) { "bad epoch" }
+        val head = v2Header(epoch)
+        val iv = randomBytes(IV_LEN)
+        val c = Cipher.getInstance("AES/GCM/NoPadding")
+        c.init(Cipher.ENCRYPT_MODE, SecretKeySpec(encKey, "AES"), GCMParameterSpec(TAG_BITS, iv))
+        c.updateAAD(head); c.updateAAD(aad)
+        val ct = c.doFinal(plain)
+        return Base64.getEncoder().encodeToString(head + iv + ct)
+    }
+
+    /** The epoch a v2 blob says it was sealed under, 0 for a version 1 blob, -1 for anything else. Not authenticated until opened. */
+    fun epochOf(blob: String): Int {
+        val raw = runCatching { Base64.getDecoder().decode(blob) }.getOrNull() ?: return -1
+        if (raw.isEmpty()) return -1
+        return when (raw[0].toInt()) {
+            VERSION -> 0
+            VERSION_EPOCH -> if (raw.size < V2_HEAD + IV_LEN + TAG_BITS / 8) -1 else {
+                val e = ((raw[1].toInt() and 0xff) shl 24) or ((raw[2].toInt() and 0xff) shl 16) or ((raw[3].toInt() and 0xff) shl 8) or (raw[4].toInt() and 0xff)
+                if (e >= 1) e else -1
+            }
+            else -> -1
+        }
+    }
+
+    /** Opens a v2 blob with the keyring ([keyFor] gives the encKey of an epoch, or null): null when it does not open. */
+    fun openE(keyFor: (Int) -> ByteArray?, blob: String, aad: ByteArray): ByteArray? = runCatching {
+        val epoch = epochOf(blob)
+        if (epoch < 1) return null
+        val k = keyFor(epoch) ?: return null
+        val raw = Base64.getDecoder().decode(blob)
+        val c = Cipher.getInstance("AES/GCM/NoPadding")
+        c.init(Cipher.DECRYPT_MODE, SecretKeySpec(k, "AES"), GCMParameterSpec(TAG_BITS, raw, V2_HEAD, IV_LEN))
+        c.updateAAD(raw, 0, V2_HEAD); c.updateAAD(aad)
+        c.doFinal(raw, V2_HEAD + IV_LEN, raw.size - V2_HEAD - IV_LEN)
+    }.getOrNull()
+
+    fun hmac(key: ByteArray, data: ByteArray): ByteArray {
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(key, "HmacSHA256"))
+        return mac.doFinal(data)
+    }
+
+    fun hkdfInfo(ikm: ByteArray, info: String, length: Int = 32): ByteArray = hkdf(ikm, null, info.toByteArray(Charsets.UTF_8), length)
+
+    /** Constant-time comparison. */
+    fun same(a: ByteArray, b: ByteArray): Boolean = MessageDigest.isEqual(a, b)
+
+    // ---------- member identity keys (P-256) and sealing to a public key ----------
+
+    class Identity(val publicSpki: ByteArray, val privatePkcs8: ByteArray)
+
+    private val P256: ECParameterSpec by lazy {
+        val g = KeyPairGenerator.getInstance("EC"); g.initialize(ECGenParameterSpec("secp256r1"), random)
+        (g.generateKeyPair().public as ECPublicKey).params
+    }
+
+    fun newIdentity(): Identity {
+        val g = KeyPairGenerator.getInstance("EC"); g.initialize(ECGenParameterSpec("secp256r1"), random)
+        val kp = g.generateKeyPair()
+        return Identity(kp.public.encoded, kp.private.encoded)
+    }
+
+    /** A P-256 public key in X.509 SubjectPublicKeyInfo form, or null for anything else (another curve, garbage, a bad point). */
+    fun publicKey(spki: ByteArray): PublicKey? = runCatching {
+        if (spki.size != SPKI_LEN) return null
+        val k = KeyFactory.getInstance("EC").generatePublic(X509EncodedKeySpec(spki)) as ECPublicKey
+        val p = k.params
+        if (p.curve != P256.curve || p.generator != P256.generator || p.order != P256.order) return null
+        k
+    }.getOrNull()
+
+    private fun privateKey(pkcs8: ByteArray): PrivateKey? = runCatching { KeyFactory.getInstance("EC").generatePrivate(PKCS8EncodedKeySpec(pkcs8)) }.getOrNull()
+
+    /** A P-256 SubjectPublicKeyInfo is always 91 bytes. */
+    const val SPKI_LEN = 91
+    private const val BOX_VERSION = 1
+
+    private fun boxKey(z: ByteArray, ephSpki: ByteArray, toSpki: ByteArray, context: String): ByteArray =
+        hkdf(z, ephSpki + toSpki, ("tally-box-v1|$context").toByteArray(Charsets.UTF_8), 32)
+
+    /** Seals [plain] so that only the holder of the private key for [toSpki] can open it, bound to [context]. */
+    fun sealTo(toSpki: ByteArray, plain: ByteArray, context: String): String {
+        val to = requireNotNull(publicKey(toSpki)) { "bad public key" }
+        val g = KeyPairGenerator.getInstance("EC"); g.initialize(ECGenParameterSpec("secp256r1"), random)
+        val eph = g.generateKeyPair()
+        val ka = KeyAgreement.getInstance("ECDH"); ka.init(eph.private); ka.doPhase(to, true)
+        val z = ka.generateSecret()
+        val ephSpki = eph.public.encoded
+        val k = boxKey(z, ephSpki, toSpki, context)
+        val iv = randomBytes(IV_LEN)
+        val c = Cipher.getInstance("AES/GCM/NoPadding")
+        c.init(Cipher.ENCRYPT_MODE, SecretKeySpec(k, "AES"), GCMParameterSpec(TAG_BITS, iv))
+        c.updateAAD(byteArrayOf(BOX_VERSION.toByte())); c.updateAAD(context.toByteArray(Charsets.UTF_8))
+        val ct = c.doFinal(plain)
+        return Base64.getEncoder().encodeToString(byteArrayOf(BOX_VERSION.toByte()) + ephSpki + iv + ct)
+    }
+
+    /** Opens a box sealed to [me] for [context], or null (another recipient, another context, tampered, malformed). */
+    fun openBox(me: Identity, blob: String, context: String): ByteArray? = runCatching {
+        val raw = Base64.getDecoder().decode(blob)
+        if (raw.size < 1 + SPKI_LEN + IV_LEN + TAG_BITS / 8 || raw[0].toInt() != BOX_VERSION) return null
+        val ephSpki = raw.copyOfRange(1, 1 + SPKI_LEN)
+        val eph = publicKey(ephSpki) ?: return null
+        val priv = privateKey(me.privatePkcs8) ?: return null
+        val ka = KeyAgreement.getInstance("ECDH"); ka.init(priv); ka.doPhase(eph, true)
+        val k = boxKey(ka.generateSecret(), ephSpki, me.publicSpki, context)
+        val c = Cipher.getInstance("AES/GCM/NoPadding")
+        c.init(Cipher.DECRYPT_MODE, SecretKeySpec(k, "AES"), GCMParameterSpec(TAG_BITS, raw, 1 + SPKI_LEN, IV_LEN))
+        c.updateAAD(byteArrayOf(raw[0])); c.updateAAD(context.toByteArray(Charsets.UTF_8))
+        c.doFinal(raw, 1 + SPKI_LEN + IV_LEN, raw.size - 1 - SPKI_LEN - IV_LEN)
+    }.getOrNull()
 
     fun openFile(encKey: ByteArray, familyId: String, fileId: String, blob: String): ByteArray? = open(encKey, blob, fileAad(familyId, fileId))
 }
