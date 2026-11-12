@@ -1,0 +1,14 @@
+{
+  "slug": "tally",
+  "kind": "android",
+  "name": "Tally",
+  "tagline": "Your family's book, shared.",
+  "category": "Finance",
+  "developer": "Tally",
+  "accentColor": "#13866f",
+  "repo": "manojanasuri16/Tally",
+  "visibility": "unlisted",
+  "icon": "appdrop/icon.png",
+  "descriptionFile": "appdrop/description.md",
+  "screenshots": []
+}

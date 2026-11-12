@@ -12,7 +12,7 @@ It is a sibling of Balance (`~/Balance/android`), whose foundation it copies (co
 
 - **Never change** the `applicationId` (`com.tally.book`), the release key (`TALLY_STORE_*` in `~/.gradle/gradle.properties`, never committed; a release build without it fails, it never falls back to the debug key), or the widget receiver's class name and package (`com.tally.book.widget.NextPaymentWidgetReceiver`: placed widgets point at it).
 - **`versionCode` goes up every release.**
-- **Privacy:** only the sync relay is contacted, and only ciphertext leaves the phone. `allowBackup="false"` stays. A private loan, its payments and its files never leave the phone, except inside a backup file the person makes.
+- **Privacy:** only the sync relay and the AppDrop store's update check (`appdrop/AppDropUpdater.kt`: the app's name and version, nothing else) are contacted, and only ciphertext leaves the phone for the relay. `allowBackup="false"` stays. A private loan, its payments and its files never leave the phone, except inside a backup file the person makes.
 - **The book is a JSON tree, not data classes.** `DB` is `Obj`/`Arr` with every number a `Double`, and unknown fields round-trip untouched.
 - **Every persisted change goes through `Ledger.edit { }`.** Screens read with `val rev = rememberLedger()` and `remember(rev) { ... }`. Reading `DB` is observed by Compose (`onDbRead`).
 - **Nothing is saved until the user saves it.** A form edits a copy held in `remember` and writes inside `Ledger.edit {}` on Save. New ids come from `uid(prefix)`.

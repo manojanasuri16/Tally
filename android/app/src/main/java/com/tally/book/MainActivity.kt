@@ -171,6 +171,12 @@ class MainActivity : FragmentActivity() {
         Backups.catchUp()
     }
 
+    override fun onResume() {
+        super.onResume()
+        // offers a newer version from the AppDrop store, at most as often as the updater allows
+        com.tally.book.appdrop.AppDropUpdater.check(this)
+    }
+
     override fun onStop() {
         visible = false
         stoppedAt = SystemClock.elapsedRealtime()

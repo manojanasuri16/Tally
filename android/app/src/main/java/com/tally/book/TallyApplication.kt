@@ -28,6 +28,8 @@ class TallyApplication : Application() {
         PhoneLock.init(this)
         installSyncHooks()
         Notices.init(this)
+        // updates come from the AppDrop store; the check sends only the app's name and version
+        com.tally.book.appdrop.AppDropUpdater.init(this, "https://appdrop-store.vercel.app", "tally")
         DueNotices.init(this)
         NextPaymentData.init(this)
         // stored documents follow the lock (encrypted while a lock is set)

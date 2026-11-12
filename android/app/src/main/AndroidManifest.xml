@@ -3,6 +3,8 @@
 
     <!-- INTERNET is for family sync only: the relay holds ciphertext, never names, amounts or files in the clear. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- in-app updates from the AppDrop store (AppDropUpdater) -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- CAMERA is for scanning an invite QR code and taking photos of payments. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />

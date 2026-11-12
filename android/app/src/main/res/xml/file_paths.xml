@@ -3,4 +3,6 @@
     <cache-path name="shared" path="shared/"/>
     <cache-path name="camera" path="camera/"/>
     <cache-path name="backup" path="backup/"/>
+    <!-- AppDropUpdater downloads update APKs here and hands them to the installer -->
+    <external-files-path name="appdrop_downloads" path="Download/appdrop/"/>
 </paths>
