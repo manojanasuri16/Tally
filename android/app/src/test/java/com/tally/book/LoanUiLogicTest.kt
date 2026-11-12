@@ -125,4 +125,32 @@ class LoanUiLogicTest {
     @Test fun theStoreKeepsAtMostFourMegabytes() {
         assertEquals(4.0, com.tally.book.model.fileCapMB(), 0.0)
     }
+
+    // ---- private loans group ----
+
+    private fun l(id: String, name: String, dir: String? = null, private: Boolean = false, closed: Boolean = false) =
+        obj("id" to id, "name" to name, "kind" to if (dir != null) "hand" else "bank", "direction" to dir, "private" to private, "closed" to closed)
+
+    @Test fun privateLoansLeaveTheKindGroupsAndGatherInTheirOwn() {
+        val open = listOf(l("a", "Bank"), l("b", "Zed", private = true), l("c", "Amma", "given", private = true), l("d", "Ravi", "given"))
+        val owed = mapOf("a" to 100.0, "b" to 40.0, "c" to 25.0, "d" to 7.0)
+        val (shared, priv) = splitPrivate(open, owed)
+        assertEquals(listOf("a", "d"), shared.map { it.s("id") })
+        assertEquals(listOf("c", "b"), priv.loans.map { it.s("id") })   // by name
+        assertEquals(40.0, priv.toPay, 0.0); assertEquals(25.0, priv.toComeBack, 0.0)
+        assertTrue(priv.hasTaken && priv.hasGiven)
+    }
+
+    @Test fun onlyOneDirectionGivesOneFigure() {
+        val (_, priv) = splitPrivate(listOf(l("b", "Zed", private = true)), mapOf("b" to 40.0))
+        assertTrue(priv.hasTaken); assertFalse(priv.hasGiven)
+        val (shared, none) = splitPrivate(listOf(l("a", "Bank")), mapOf("a" to 1.0))
+        assertEquals(1, shared.size); assertTrue(none.loans.isEmpty())
+    }
+
+    @Test fun closedPrivateLoansStayOutOfTheGroupWhenOnlyOpenOnesAreSplit() {
+        val all = listOf(l("b", "Zed", private = true), l("x", "Old", private = true, closed = true))
+        val (_, priv) = splitPrivate(all.filter { !it.b("closed") }, mapOf("b" to 3.0, "x" to 9.0))
+        assertEquals(listOf("b"), priv.loans.map { it.s("id") }); assertEquals(3.0, priv.toPay, 0.0)
+    }
 }

@@ -93,3 +93,16 @@ fun payKindOptions(loanKind: String, keep: String?): List<String> {
     val base = payKindsFor(loanKind)
     return if (!keep.isNullOrEmpty() && keep !in base && keep in com.tally.book.model.PAY_KINDS) base + keep else base
 }
+
+/** The open private loans gathered for the "Only on this phone" group, with what is still to pay and to come back on them. */
+class PrivateLoans(val loans: List<Obj>, val toPay: Double, val toComeBack: Double, val hasTaken: Boolean, val hasGiven: Boolean)
+
+/** Splits the open loans: the private ones (taken and given, by name) for their own group, the rest for the kind groups. Closed loans are not touched here. */
+fun splitPrivate(open: List<Obj>, owed: Map<String, Double>): Pair<List<Obj>, PrivateLoans> {
+    val (priv, shared) = open.partition { it.b("private") }
+    val sorted = priv.sortedBy { it.s("name").lowercase() }
+    val taken = sorted.filter { !com.tally.book.model.isGiven(it) }
+    val given = sorted.filter { com.tally.book.model.isGiven(it) }
+    fun sum(l: List<Obj>) = l.sumOf { owed[it.s("id")] ?: 0.0 }
+    return shared to PrivateLoans(sorted, sum(taken), sum(given), taken.isNotEmpty(), given.isNotEmpty())
+}

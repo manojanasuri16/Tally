@@ -101,7 +101,7 @@ fun WelcomeScreen() {
 
 private class Home(
     val totals: Obj, val due: List<Obj>, val expected: List<Obj>, val groups: List<Pair<String, List<Obj>>>, val given: List<Obj>,
-    val closed: List<Obj>, val any: Boolean, val owed: Map<String, Double>, val hasTaken: Boolean, val showAdder: Boolean,
+    val closed: List<Obj>, val hasGiven: Boolean, val priv: PrivateLoans, val any: Boolean, val owed: Map<String, Double>, val hasTaken: Boolean, val showAdder: Boolean,
 )
 
 /** A pending Pay / Received tap: the loan and what the row was for ("principal" starts the form as a part repayment). */
@@ -110,14 +110,16 @@ private class PayFor(val loanId: String, val kind: String?)
 private fun readHome(): Home {
     val all = loans()
     val open = all.filter { !it.b("closed") }
+    val owed = all.associate { it.s("id") to loanView(it).num("owed") }
+    val (shared, priv) = splitPrivate(open, owed)
     val taken = open.filter { !isGiven(it) }
     val kinds = LOAN_KINDS + taken.map { it.s("kind") }.filter { it !in LOAN_KINDS }.distinct()
-    val groups = kinds.map { k -> k to taken.filter { it.s("kind") == k }.sortedBy { it.s("name").lowercase() } }.filter { it.second.isNotEmpty() }
+    val groups = kinds.map { k -> k to shared.filter { !isGiven(it) && it.s("kind") == k }.sortedBy { it.s("name").lowercase() } }.filter { it.second.isNotEmpty() }
     val given = open.filter { isGiven(it) }.sortedBy { it.s("name").lowercase() }
+    val givenShared = shared.filter { isGiven(it) }.sortedBy { it.s("name").lowercase() }
     val closed = all.filter { it.b("closed") }.sortedByDescending { it.s("closedDate") }
-    val owed = all.associate { it.s("id") to loanView(it).num("owed") }
     val rows = dueList()
-    return Home(totals(), rows.filter { !it.b("given") }, rows.filter { it.b("given") }, groups, given, closed, all.isNotEmpty(), owed, taken.isNotEmpty(), bookHasOthers())
+    return Home(totals(), rows.filter { !it.b("given") }, rows.filter { it.b("given") }, groups, givenShared, closed, open.any { isGiven(it) }, priv, all.isNotEmpty(), owed, taken.isNotEmpty(), bookHasOthers())
 }
 
 @Composable
@@ -152,9 +154,10 @@ fun LoansScreen() {
                     } else {
                         HomeHero(home)
                         if (home.hasTaken) DueSection(home.due, onPay = { id, k -> payFor = PayFor(id, k) }, onOpen = { openLoan(it) })
-                        if (home.given.isNotEmpty()) DueSection(home.expected, onPay = { id, k -> payFor = PayFor(id, k) }, onOpen = { openLoan(it) }, given = true)
+                        if (home.hasGiven) DueSection(home.expected, onPay = { id, k -> payFor = PayFor(id, k) }, onOpen = { openLoan(it) }, given = true)
                         home.groups.forEach { (kind, list) -> LoanGroup(kindLabel(kind), list, home.owed, home.showAdder) }
                         if (home.given.isNotEmpty()) LoanGroup(t("home.gave", "Money I gave"), home.given, home.owed, home.showAdder)
+                        if (home.priv.loans.isNotEmpty()) PrivateGroup(home.priv, home.owed)
                         if (home.closed.isNotEmpty()) ClosedGroup(home.closed, closedOpen) { closedOpen = !closedOpen }
                     }
                     PrimaryButton(t("home.addLoan", "Add a loan"), { adding = true }, Modifier.fillMaxWidth().padding(top = 4.dp))
@@ -171,7 +174,7 @@ fun LoansScreen() {
 @Composable
 private fun HomeHero(home: Home) {
     val toReceive = home.totals.num("toReceive")
-    val hasGiven = home.given.isNotEmpty()
+    val hasGiven = home.hasGiven
     if (home.hasTaken || !hasGiven) {
         Hero(
             t("home.stillToPay", "Still to pay"), home.totals.num("owed"),
@@ -235,6 +238,29 @@ private fun LoanGroup(title: String, list: List<Obj>, owed: Map<String, Double>,
                     l.s("name"), sub = loanRowSub(l.s("lender"), if (showAdder) memberName(l.s("by")) else null), money = owed[l.s("id")] ?: 0.0, moneyColor = Apple.colors.label,
                     chevron = true, onClick = { openLoan(l.s("id")) },
                     trailing = if (l.b("private")) ({ PrivateMark() }) else null,
+                )
+            }
+        }
+    }
+}
+
+/** Open private loans together: taken and given, one header total per direction, a line saying they stay on this phone. */
+@Composable
+private fun PrivateGroup(p: PrivateLoans, owed: Map<String, Double>) {
+    val total = listOfNotNull(
+        if (p.hasTaken) "${t("home.toPay", "To pay")} ${amtText(p.toPay)}" else null,
+        if (p.hasGiven) "${loanWords(true).toReturn} ${amtText(p.toComeBack)}" else null,
+    ).joinToString(" · ")
+    AGroup(
+        title = t("home.private", "Only on this phone"), footer = t("home.private.foot", "Your family doesn't see these."),
+        trailingHead = { Text(total, style = Apple.type.subheadline, maxLines = 1) },
+    ) {
+        p.loans.forEach { l ->
+            item {
+                ARow(
+                    l.s("name"), sub = listOf(loanKindLabel(l), l.s("lender")).filter { it.isNotBlank() }.joinToString(" · "),
+                    money = owed[l.s("id")] ?: 0.0, moneyColor = Apple.colors.label, chevron = true, onClick = { openLoan(l.s("id")) },
+                    trailing = { PrivateMark() },
                 )
             }
         }
