@@ -34,6 +34,7 @@ DB = {
   members: [ { id, name, pub, invite?, left?, at, updatedAt, updatedBy, deleted? } ],
   loans:   [ { id, kind, name, lender, principal, rate, startDate, note, private, closed, closedDate,
                interestMethod,                  // "reducing" (default: interest on what is still owed) | "flat" (on the original amount); every kind with interest
+               paidUpTo,                        // optional ISO date, after startDate, not in the future: everything due on or before it was paid as agreed (a loan entered late)
                // bank only:
                tenure,                          // number of instalments (in the loan's frequency); 0 = work it out from emi
                emi,                             // the instalment; 0 = work it out from tenure (whole rupees)
@@ -90,6 +91,13 @@ All figures come from the payments actually logged; nothing is added to what is 
 - **Interest payments cover periods in order, oldest first;** a partial payment covers part of one. **Pending** (`interestPending`, `periodsPending`): the uncovered part of every period that ended before today, since the start or since the last period fully paid. Interest is counted only for whole periods that ended while something was still owed: when the whole amount is returned mid-period, that last part-period is not worked out (settle it by hand as an interest payment).
 - A loan with `rate: 0` (hand or gold) has no interest: no next due, never pending, never overdue, simply still owed.
 - **Repay by** (`repayBy`, hand and gold): from the month it falls in, the remaining amount is a principal row in the due list, overdue once the date has passed while anything is owed. **Renewing** (`renewLoan`) moves the date and keeps a `renewals` entry; it does not touch interest: whatever interest is pending stays pending until it is paid as an interest payment.
+
+### A loan entered after it started (`paidUpTo`)
+
+- Every instalment (bank) or interest period (hand, gold) dated on or before `paidUpTo` counts as paid as agreed, with no payments logged for it; `loanView` gives `paidUpTo` and `paidUpToCount` (how many it covered). `suggestPaidUpTo(draft, today)` gives the form the most recent due date before today by the draft's schedule (for a bank loan at most its agreed number of instalments), "" when none.
+- Bank loans: what is owed follows the schedule to that date: reducing, each covered instalment pays its interest at the rate in force on its date (rate changes before `paidUpTo` included) and the rest is principal; flat, P minus the covered principal parts.
+- Hand and gold loans: the principal is not changed by `paidUpTo`. **If part of the amount was already returned before that date, enter what was still owed on that date as the amount**, since interest after it is worked on that.
+- Logged payments dated after `paidUpTo` work as always. Payments dated on or before it are counted in `paidTotal` (and in the month's paid totals) but cover nothing and lower nothing: the date already accounts for them. Nothing is invented: `paidInterest`, `paidPrincipal` and `paidThisMonth` come from logged payments only.
 
 ### Due list, totals, suggestion, reminders
 

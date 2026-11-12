@@ -84,6 +84,7 @@ fun loanView(loan: Obj, payments: List<Obj>, today: LocalDate): Obj {
         "paidThisPeriod" to paidThisPeriod,
         "pendingAmount" to pending.sumOf { it.left }, "pendingCount" to pending.size.toDouble(),
         "monthDue" to month.sumOf { it.left }, "monthDueCount" to month.size.toDouble(),
+        "paidUpTo" to (paidUpToOf(loan)?.toString() ?: ""), "paidUpToCount" to (c?.prePaid ?: 0).toDouble(),
     )
     if (kind == "bank") {
         val freq = frequencyOf(loan)
@@ -214,6 +215,11 @@ fun validateLoan(draft: Obj): String? {
     if (draft.num("principal") <= 0) return t("loan.err.principal", "Please enter the loan amount.")
     if (draft.num("rate") < 0) return t("loan.err.rate", "The interest rate cannot be below zero.")
     val start = parseISO(draft.s("startDate")) ?: return t("loan.err.date", "Please enter the date the loan started.")
+    if (draft.s("paidUpTo").isNotEmpty()) {
+        val up = parseISO(draft.s("paidUpTo")) ?: return t("loan.err.paidUpTo", "Please enter the date it is paid up to.")
+        if (!up.isAfter(start)) return t("loan.err.paidUpTo.early", "The paid-up-to date must be after the loan started.")
+        if (up.isAfter(Clock.today())) return t("loan.err.paidUpTo.future", "The paid-up-to date cannot be in the future.")
+    }
     val m = draft.s("interestMethod")
     if (m.isNotEmpty() && m !in INTEREST_METHODS) return t("loan.err.method", "Please choose how the interest is worked out.")
     if (kind == "bank") {

@@ -106,7 +106,19 @@ internal class LoanCalc(
     val covered: Int = 0, val clears: Boolean = true, val flatInterestPart: Double = 0.0,
     // interest-only loans
     val periodInterestNow: Double = 0.0,
+    // both: instalments or periods counted as paid by `paidUpTo`
+    val prePaid: Int = 0,
 )
+
+/** The loan's `paidUpTo` date (everything due on or before it was paid as agreed before the loan was entered), or null. */
+fun paidUpToOf(loan: Obj): LocalDate? = parseISO(loan.s("paidUpTo"))
+
+/** A logged payment dated on or before `paidUpTo`: counted in paidTotal only, it covers nothing (the date already covers it). */
+private fun beforePaidUpTo(p: Obj, upTo: LocalDate?): Boolean {
+    if (upTo == null) return false
+    val d = parseISO(p.s("date")) ?: return false
+    return !d.isAfter(upTo)
+}
 
 /** How far ahead slots are worked out: the end of this month, or three days on when that is later (reminders look 3 days ahead). */
 internal fun slotLimit(today: LocalDate): LocalDate {
@@ -176,9 +188,18 @@ internal fun calcInstalments(loan: Obj, pays: List<Obj>, start: LocalDate, today
         full = if (n > 0 && k >= n && b + i - e <= n + 1.0) b + i else min(e, b + i)
         left = full; intLeft = min(i, full); started = true
     }
+    /* paidUpTo: every instalment dated on or before it was paid as agreed, so the balance follows the schedule to that date */
+    val upTo = paidUpToOf(loan)
+    var prePaid = 0
+    if (upTo != null) while (bal > 0.005 && !sched.due(k).isAfter(upTo) && prePaid < 100000) {
+        open(bal)
+        bal -= max(0.0, min(bal, left - intLeft))
+        k++; started = false; prePaid++
+    }
     for (p in pays) {
         val amt = p.num("amount")
         paidTotal += amt
+        if (beforePaidUpTo(p, upTo)) continue
         when (p.s("kind")) {
             "principal" -> { val x = min(bal, amt); bal -= x; paidPrincipal += x }
             "interest" -> paidInterest += amt
@@ -215,9 +236,9 @@ internal fun calcInstalments(loan: Obj, pays: List<Obj>, start: LocalDate, today
         pb -= principalPart; k++; started = false
         if (!clears && d.isAfter(limit)) break
     }
-    return LoanCalc(bal, paidTotal, paidPrincipal, paidInterest, slots, hasPaid,
+    return LoanCalc(bal, paidTotal, paidPrincipal, paidInterest, slots, hasPaid || prePaid > 0,
         emiNow = emiAt(today), emiStart = emi0, rateNow = if (flat) baseRate else rateOn(loan, today), count = n,
-        covered = covered, clears = clears, flatInterestPart = fi)
+        covered = covered, clears = clears, flatInterestPart = fi, prePaid = prePaid)
 }
 
 // ---- interest-only loans ----
@@ -229,8 +250,11 @@ internal fun calcInterestOnly(loan: Obj, pays: List<Obj>, start: LocalDate, toda
     var paidPrincipal = 0.0; var paidInterest = 0.0; var paidTotal = 0.0
     var repaidOn: LocalDate? = null
     val returns = ArrayList<Pair<LocalDate?, Double>>()
+    /* paidUpTo: the principal is what was still owed on that date, and every period ending on or before it was paid */
+    val upTo = paidUpToOf(loan)
     for (p in pays) {
         val amt = p.num("amount"); paidTotal += amt
+        if (beforePaidUpTo(p, upTo)) continue
         when (p.s("kind")) {
             "principal", "emi" -> {
                 val x = min(bal, amt); bal -= x; paidPrincipal += x
@@ -249,11 +273,12 @@ internal fun calcInterestOnly(loan: Obj, pays: List<Obj>, start: LocalDate, toda
     val limit = slotLimit(today)
     val slots = ArrayList<Slot>()
     var t = paidInterest
-    var prev = start; var k = 1
+    var prev = start; var k = 1; var prePaid = 0
     while (k < 5000) {
         val due = clampDay(addMonths(sk, k * step), start.dayOfMonth)
         /* only whole periods that ended while money was still owed */
         if (repaidOn != null && due.isAfter(repaidOn)) break
+        if (upTo != null && !due.isAfter(upTo)) { prePaid++; prev = due; k++; continue }
         val whole = periodInterest(loan, if (flat) p0 else owedOn(prev))
         val cover = min(t, whole); t -= cover
         val unpaid = whole - cover
@@ -262,5 +287,26 @@ internal fun calcInterestOnly(loan: Obj, pays: List<Obj>, start: LocalDate, toda
         prev = due; k++
     }
     val now = if (bal <= 0) 0.0 else periodInterest(loan, if (flat) p0 else bal)
-    return LoanCalc(bal, paidTotal, paidPrincipal, paidInterest, slots, paidInterest > 0, periodInterestNow = now)
+    return LoanCalc(bal, paidTotal, paidPrincipal, paidInterest, slots, paidInterest > 0 || prePaid > 0, periodInterestNow = now, prePaid = prePaid)
+}
+
+/**
+ * For the loan form: the most recent instalment or interest date before [today] by the draft's own schedule (a bank loan: at most its
+ * agreed number of instalments), so "Paid up to" can be pre-filled when the start date is in the past. "" when none has come due
+ * yet, for a no-interest loan, or when the draft cannot be scheduled.
+ */
+fun suggestPaidUpTo(draft: Obj, today: LocalDate = Clock.today()): String {
+    val start = parseISO(draft.s("startDate")) ?: return ""
+    var last: LocalDate? = null
+    if (draft.s("kind") == "bank") {
+        val sched = Schedule(start, frequencyOf(draft), draft.num("dueDay").toInt())
+        val n = tenureOf(draft)
+        var k = 1
+        while (k < 100000 && (n <= 0 || k <= n)) { val d = sched.due(k); if (!d.isBefore(today)) break; last = d; k++ }
+    } else if (draft.s("kind") in setOf("hand", "gold") && draft.num("rate") > 0) {
+        val step = if (interestEvery(draft) == "month") 1 else 12
+        var k = 1
+        while (k < 5000) { val d = clampDay(addMonths(monthKey(start), k * step), start.dayOfMonth); if (!d.isBefore(today)) break; last = d; k++ }
+    }
+    return last?.toString() ?: ""
 }
