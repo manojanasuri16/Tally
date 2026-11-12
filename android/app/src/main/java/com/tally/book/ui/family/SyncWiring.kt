@@ -61,10 +61,14 @@ fun SyncStatusLine() {
         SyncText.Action.RETRY -> ({ Sync.syncInBackground() })
         SyncText.Action.NONE -> null
     }
+    // Easy mode: nothing while all is well; one plain line (in the warning colour) only when something needs attention
+    val easy = com.tally.book.ui.theme.LocalEasy.current
+    val attention = SyncText.needsAttention(line, view.oldFamily)
+    if (easy && !attention) return
     Box(
-        Modifier.fillMaxWidth().heightIn(min = 44.dp).then(if (tap != null) Modifier.pressDim(onClick = tap) else Modifier).padding(end = 4.dp),
+        Modifier.fillMaxWidth().heightIn(min = com.tally.book.ui.theme.touchMin(44.dp)).then(if (tap != null) Modifier.pressDim(onClick = tap) else Modifier).padding(end = 4.dp),
         contentAlignment = Alignment.CenterStart,
     ) {
-        Text(line.text, style = Apple.type.footnote, color = Apple.colors.secondaryLabel)
+        Text(line.text, style = Apple.type.footnote, color = if (easy) com.tally.book.ui.theme.LocalSemantic.current.warning else Apple.colors.secondaryLabel)
     }
 }

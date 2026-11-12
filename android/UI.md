@@ -182,7 +182,7 @@ The other half is ledger reads. Reading `DB` also reads a Compose state that `Le
 
 ## Accessibility
 
-- **Font scale.** Every size is in `sp` and rows only set a minimum height (`heightIn(min = …)`), so text can grow. Long titles step down a size (`largeTitleStyle`). Never fix a height around text.
+- **Font scale.** Every size is in `sp` and rows only set a minimum height (`heightIn(min = …)`), so text can grow. Long titles step down a size (`largeTitleStyle`). Never fix a height around text. See "Large text" and "Easy mode" below.
 - **Reduced motion.** Read `reduceMotion()`. Slides, scales and parallax become 200 ms cross-fades, and opacity changes that help comprehension stay. The kit already does this.
 - **Contrast.** Body text is `label`. Grey is for secondary information only. Light-mode semantic text uses the high-contrast greens and reds. Never put text on the translucent bar without the bar material behind it.
 - **Telugu and Hindi** run 30–60 % longer. Names may use `maxLines` with an ellipsis; figures and buttons never do. The segmented control switches to wrapping capsules when labels are long, alert buttons stack, and sheet titles may take two lines. Test with the language set to Telugu.
@@ -207,6 +207,28 @@ The other half is ledger reads. Reading `DB` also reads a Compose state that `Le
 | `bottomClearance()` / `ScreenPadding` | a hard-coded bottom padding |
 | Ripples off, `pressable` / `pressDim` | `indication = ripple()` |
 
+
+## Large text (the phone's own font size, up to 200 %)
+
+The app must work at font scale 1.3, 1.5 and 2.0 in English, Telugu and Hindi. The rules the kit follows, so a screen gets them by using the kit:
+
+- **Wrap, never ellipsis,** for labels, row titles, supporting lines, buttons, capsule choices, pills, toasts and sheet titles (`ARow`, `ListRow`, `CapsuleChoice`, `SheetHeader`, `Toast` all wrap). An ellipsis is only for a file name, a back label and the last resort of a large title (two lines, then an ellipsis).
+- **Figures never truncate.** `Money` is one line, and when it is wider than its room it steps down in size until it fits (`onTextLayout`), so a large total shrinks instead of being cut off.
+- **Stack what does not fit.** From a font scale of 1.3 (`bigText()`, `EasyRules.STACK_AT`) a row's amount or value goes under its title (`ARow`, `ListRow`); a Due row puts its Pay button under the details; a sheet's Cancel and Save stack, Save on top, both full width and pinned (the body above scrolls); alert buttons stack and a long message scrolls inside the alert; a segmented control becomes wrapping capsules (it does that already for long Telugu words).
+- **Titles.** The large title may take two lines (it is measured, so the collapsing bar is exactly as tall as the title) and never grows past 1.5x (`capped()`); the inline title may take two lines.
+- **Fixed shapes cap their text.** The keypad keys hold their digits to 1.3x (`capped(1.3f)`), and the Material calendar, which does not scroll, is held to 1.3x inside its dialog.
+- **Dimensions that follow the text** use `heightIn(min = …)`; the touch minimum is `touchMin(44.dp)`; spacing between cards is `stackGap()` and the side gutter `gutter()`, both larger in Easy mode.
+
+## Easy mode
+
+A device setting (`EasyMode`, `DevicePrefs` `tally-easy`, `ui/theme/EasyMode.kt`): not in the book, not synced, not in a backup, and applied at once (it is Compose state read in `MainActivity`, so the lock screen follows too). The switch is the first row of the Family page's settings; the welcome screen offers it once after the name. What the app is told: `Appearance(easy = true, fontScale = 1.3f)`, `LocalEasy`, and a stronger `AppleColors`.
+
+- **Scale.** `EasyRules.scale(system, extra)` = the phone's font scale times 1.3, never above **2.0** and never below the phone's own scale (1.0 gives 1.3, 1.15 gives 1.5, 1.3 gives 1.69, 1.5 gives 1.95, 1.54 and up give 2.0; a phone already above 2.0 is left alone). `TallyTheme` provides the result as `LocalDensity`'s font scale, so every `sp` follows.
+- **Sizes.** Touch targets are at least 56 dp (`touchMin`): rows, buttons (the primary button 60), bar icons, the sheet's X, segmented and capsule choices, alert buttons, the toast. Row padding, the gutter (20) and the gap between cards (18) grow; icon tiles are 38 dp, switches 1.25x, amounts in rows are bold.
+- **Contrast** (`EasyRules.contrast`): labels pure black or white, secondary text the label dimmed to 80 %, hairlines and card outlines pulled 35 to 45 % toward black or white, fills and the press highlight stronger, presses scale a little deeper, and a field being typed in gets a 2 dp accent outline.
+- **Gestures.** `SwipeRow` is off (the payment's sheet has Delete, which asks and then offers Undo); `EditSheet` never closes from a drag or a tap outside, has no grabber and closes from X, Cancel or Back. Pull to refresh stays.
+- **Home.** `DueRow` is stacked with a full-width Pay or Received button; the sync line (`SyncText.needsAttention`) and the private group's header totals are hidden; "added by" is left off the rows.
+- **Forms.** `EasyForm` (in `FormRules.kt`) decides which fields of the loan form are drawn; `extrasOf(existing)` makes a loan that already uses Flat, a frequency other than monthly, a pay-on day, a non-default "interest is paid" or Paid up to show those fields. Hidden fields keep their defaults, and `suggestPaidUpTo` still applies to a new loan with a past start date.
 
 ## Appearance and the widget
 

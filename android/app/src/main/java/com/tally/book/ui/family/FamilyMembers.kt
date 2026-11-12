@@ -64,7 +64,7 @@ fun InFamily(view: MembershipView, onInvite: () -> Unit) {
         if (view.iAmAdmin) item { ARow(t("family.rename", "Rename family"), icon = Icons.Rounded.Edit, chevron = true, onClick = { renaming = true }) }
         item {
             ARow(
-                t("family.syncNow", "Sync now"),
+                if (com.tally.book.ui.theme.LocalEasy.current) t("family.refresh", "Refresh") else t("family.syncNow", "Sync now"),
                 sub = if (lastAt > 0) t("family.lastSync", "Last synced {when}", "when" to SyncText.ago(lastAt, maxOf(now, lastAt))) else t("family.neverSynced", "Not synced yet"),
                 icon = Icons.Rounded.Sync, onClick = { if (!state.running) scope.launch { FamilyFlow.syncNow() } },
                 trailing = if (state.running) ({ CircularProgressIndicator(Modifier.size(20.dp), color = Apple.colors.accent, strokeWidth = 2.dp) }) else null,
@@ -187,11 +187,17 @@ fun InviteSheet(onDismiss: () -> Unit) {
         AGroup(title = if (open.isEmpty()) null else t("invite.open", "Open invites")) {
             open.forEach { i ->
                 item {
-                    ARow(
-                        if (i.mine) t("invite.open.mine", "Your invite") else t("invite.open.by", "Invite from {name}", "name" to i.byName.ifBlank { t("member.someone", "Someone") }),
-                        sub = MemberText.invitePeriod(i.expiresAt, now),
-                        trailing = { PlainButton(t("invite.cancel", "Cancel invite"), { scope.launch { FamilyFlow.cancelInvite(i.id) } }, color = LocalSemantic.current.negative) },
-                    )
+                    // with large text the Cancel button goes under the words instead of squeezing them
+                    val stacked = com.tally.book.ui.theme.bigText()
+                    val cancel = t("invite.cancel", "Cancel invite")
+                    Column {
+                        ARow(
+                            if (i.mine) t("invite.open.mine", "Your invite") else t("invite.open.by", "Invite from {name}", "name" to i.byName.ifBlank { t("member.someone", "Someone") }),
+                            sub = MemberText.invitePeriod(i.expiresAt, now),
+                            trailing = if (stacked) null else ({ PlainButton(cancel, { scope.launch { FamilyFlow.cancelInvite(i.id) } }, color = LocalSemantic.current.negative) }),
+                        )
+                        if (stacked) ButtonRow(cancel, LocalSemantic.current.negative) { scope.launch { FamilyFlow.cancelInvite(i.id) } }
+                    }
                 }
             }
         }

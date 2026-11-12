@@ -89,11 +89,23 @@ fun PaymentSheet(loanId: String, existing: Obj?, sms: String? = null, startKind:
         if (!theLoan.b("closed") && reachedZero(before, after)) offerClose(loanId, words.closeAsk)
     }
 
+    val scope = rememberCoroutineScope()
+    // A saved payment can be deleted from its sheet (always asks first; the toast then offers Undo)
+    val delete: (() -> Unit)? = existing?.let { p ->
+        {
+            scope.launch {
+                if (Dialogs.ask(t("pay.delete.ask", "Delete this payment?\n\nYou can undo this for a few seconds."), t("dlg.delete", "Delete"), danger = true)) {
+                    deletePaymentWithUndo(p)
+                    onDismiss()
+                }
+            }
+        }
+    }
     EditSheet(
         if (editing) t("pay.edit", "Edit payment") else words.log, onDismiss = onDismiss,
-        onSave = { save() }, saveLabel = t("dlg.save", "Save"),
+        onSave = { save() }, saveLabel = t("dlg.save", "Save"), onDelete = delete,
     ) {
-        Text(theLoan.s("name"), Modifier.padding(start = 4.dp), style = Apple.type.subheadline, color = Apple.colors.secondaryLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(theLoan.s("name"), Modifier.padding(start = 4.dp), style = Apple.type.subheadline, color = Apple.colors.secondaryLabel)
         MoneyField(amount, { amount = it; amountTouched = true; error = null }, if (given) t("pay.amount.given", "Amount received") else t("pay.amount", "Amount paid"))
         DateField(date, { date = it; error = null }, t("pay.date", "Date"))
         Text(t("pay.for", "What is it for?"), Modifier.padding(start = 14.dp), style = Apple.type.footnote, color = Apple.colors.secondaryLabel)

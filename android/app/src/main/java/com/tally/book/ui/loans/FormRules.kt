@@ -1,6 +1,7 @@
 package com.tally.book.ui.loans
 
 import com.tally.book.core.*
+import com.tally.book.model.frequencyOf
 import com.tally.book.model.hasRepayBy
 import java.time.LocalDate
 
@@ -64,4 +65,48 @@ object LoanFormRules {
         val span = maxOf(1L, daysBetween(from, by))
         return on.plusDays(span).toString()
     }
+}
+
+/**
+ * The loan form in Easy mode: only the essential questions (kind, name, who, amount, date, the rate, EMI or number of months, grams, repay
+ * or renew by, Keep private). Reducing / Flat, how often, the pay-on day, "interest is paid every" and Paid up to stay at their defaults and
+ * are not drawn. But a loan that already uses one of them is never edited blind: [extrasOf] says which ones it uses, and the form then draws
+ * those fields as in the standard form. A new loan whose start date is in the past still gets Paid up to from [suggestPaidUpTo] (so an old loan
+ * never shows years of pending payments), with one quiet line saying so ([paidUpToNote]).
+ * Pure, so it is tested (EasyModeTest); LoanSheet only asks.
+ */
+object EasyForm {
+    /** Which hidden options a loan already uses. */
+    data class Extras(val method: Boolean = false, val frequency: Boolean = false, val dueDay: Boolean = false, val every: Boolean = false, val paidUpTo: Boolean = false) {
+        val any: Boolean get() = method || frequency || dueDay || every || paidUpTo
+    }
+
+    val NONE = Extras()
+
+    /** The advanced options [existing] uses (none for a new loan). */
+    fun extrasOf(existing: Obj?): Extras {
+        existing ?: return NONE
+        val kind = existing.s("kind")
+        val start = parseISO(existing.s("startDate"))
+        val day = existing.num("dueDay").toInt()
+        val every = existing.s("interestEvery")
+        return Extras(
+            method = existing.s("interestMethod") == "flat",
+            frequency = kind == "bank" && frequencyOf(existing) != "month",
+            dueDay = kind == "bank" && frequencyOf(existing) == "month" && day in 1..31 && start != null && day != start.dayOfMonth,
+            every = kind != "bank" && (every == "month" || every == "year") && every != (if (kind == "gold") "year" else "month"),
+            paidUpTo = existing.s("paidUpTo").isNotEmpty(),
+        )
+    }
+
+    fun showMethod(easy: Boolean, hasInterest: Boolean, x: Extras): Boolean = hasInterest && (!easy || x.method)
+    fun showFrequency(easy: Boolean, kind: String, x: Extras): Boolean = LoanFormRules.showFrequency(kind) && (!easy || x.frequency)
+    fun showDueDay(easy: Boolean, kind: String, frequency: String, x: Extras): Boolean = LoanFormRules.showDueDay(kind, frequency) && (!easy || x.dueDay)
+    fun showEvery(easy: Boolean, kind: String, hasInterest: Boolean, x: Extras): Boolean = kind != "bank" && hasInterest && (!easy || x.every)
+
+    /** The Paid up to field itself. Easy mode draws it only for a loan that already has one. */
+    fun showPaidUpToField(easy: Boolean, paidShown: Boolean, x: Extras): Boolean = paidShown && (!easy || x.paidUpTo)
+
+    /** The quiet line "Payments up to <date> are counted as already paid." instead of the field: Easy mode, a new loan, with a suggestion. */
+    fun paidUpToNote(easy: Boolean, editing: Boolean, suggestion: String): Boolean = easy && !editing && suggestion.isNotEmpty()
 }

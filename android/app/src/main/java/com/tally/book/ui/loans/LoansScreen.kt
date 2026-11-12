@@ -48,6 +48,10 @@ import com.tally.book.ui.components.*
 import com.tally.book.ui.theme.Apple
 import com.tally.book.ui.theme.LocalSemantic
 import com.tally.book.ui.theme.Motion
+import com.tally.book.ui.theme.EasyMode
+import com.tally.book.ui.theme.LocalEasy
+import com.tally.book.ui.theme.bigText
+import com.tally.book.ui.theme.stackGap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -80,19 +84,36 @@ private fun RootScreen() {
 @Composable
 fun WelcomeScreen() {
     var name by remember { mutableStateOf("") }
+    // After the name, once: "Make Tally bigger and simpler?" (skipped when Easy mode is already on). The name is saved by whichever answer is chosen.
+    var offering by remember { mutableStateOf(false) }
     val haptics = rememberHaptics()
     val question = t("welcome.name", "What is your name?")
     val restore = restorePicker?.invoke()
+    fun finish(easy: Boolean) {
+        haptics.confirm()
+        if (easy) EasyMode.set(true)
+        Ledger.edit { setMyName(name) }
+    }
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).windowInsetsPadding(WindowInsets.safeDrawing)) {
-        Column(Modifier.align(Alignment.Center).widthIn(max = 480.dp).padding(horizontal = 24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-            Text(question, style = Apple.type.title1, color = Apple.colors.label, modifier = Modifier.semantics { contentDescription = question })
-            TextInput(name, { name = it }, "", placeholder = t("welcome.placeholder", "Your name"))
-            PrimaryButton(t("welcome.continue", "Continue"), {
-                haptics.confirm()
-                Ledger.edit { setMyName(name) }
-            }, Modifier.fillMaxWidth(), enabled = name.isNotBlank())
-            // a new phone: bring the book back instead of starting again
-            if (restore != null) PlainButton(t("welcome.haveBackup", "I have a backup"), restore, Modifier.align(Alignment.CenterHorizontally))
+        Column(
+            Modifier.align(Alignment.Center).widthIn(max = 480.dp).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp),
+        ) {
+            if (!offering) {
+                Text(question, style = Apple.type.title1, color = Apple.colors.label, modifier = Modifier.semantics { contentDescription = question })
+                TextInput(name, { name = it }, "", placeholder = t("welcome.placeholder", "Your name"))
+                PrimaryButton(t("welcome.continue", "Continue"), {
+                    if (EasyMode.on) finish(false) else { haptics.confirm(); offering = true }
+                }, Modifier.fillMaxWidth(), enabled = name.isNotBlank())
+                // a new phone: bring the book back instead of starting again
+                if (restore != null) PlainButton(t("welcome.haveBackup", "I have a backup"), restore, Modifier.align(Alignment.CenterHorizontally))
+            } else {
+                val ask = t("easy.offer.title", "Make Tally bigger and simpler?")
+                Text(ask, style = Apple.type.title1, color = Apple.colors.label, modifier = Modifier.semantics { contentDescription = ask })
+                Text(t("easy.offer.body", "Bigger text and fewer choices. You can change this later on the Family page."), style = Apple.type.body, color = Apple.colors.secondaryLabel)
+                PrimaryButton(t("easy.offer.yes", "Yes, make it easy"), { finish(true) }, Modifier.fillMaxWidth())
+                SecondaryButton(t("easy.offer.no", "No, thanks"), { finish(false) }, Modifier.fillMaxWidth())
+            }
         }
     }
 }
@@ -137,6 +158,8 @@ fun LoansScreen() {
         else try { hook() } catch (e: CancellationException) { throw e } catch (e: Exception) { Dialogs.snack(t("home.syncFailed", "Could not sync. Please try again.")) }
     }
 
+    val easy = LocalEasy.current
+
     // The pull's connection sits above NavScreen, so the large title takes a downward drag first and the pull starts only once the title is fully open.
     Box(Modifier.fillMaxSize().nestedScroll(pull.connection)) {
         NavScreen(
@@ -147,7 +170,7 @@ fun LoansScreen() {
                 PullRefreshIndicator(pull)
                 Column(
                     Modifier.fillMaxSize().pullRefreshContent(pull).verticalScroll(rememberScrollState()).padding(ScreenPadding),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(stackGap()),
                 ) {
                     joinRequestsCard?.invoke()
                     if (!home.any) {
@@ -158,8 +181,9 @@ fun LoansScreen() {
                         HomeHero(home)
                         if (home.hasTaken) DueSection(home.due, onPay = { id, k -> payFor = PayFor(id, k) }, onOpen = { openLoan(it) })
                         if (home.hasGiven && home.expected.isNotEmpty()) DueSection(home.expected, onPay = { id, k -> payFor = PayFor(id, k) }, onOpen = { openLoan(it) }, given = true)
-                        home.groups.forEach { (kind, list) -> LoanGroup(kindLabel(kind), list, home.owed, home.showAdder) }
-                        if (home.given.isNotEmpty()) LoanGroup(t("home.gave", "Money I gave"), home.given, home.owed, home.showAdder)
+                        // Easy mode leaves out "added by" under each name: one line per loan
+                        home.groups.forEach { (kind, list) -> LoanGroup(kindLabel(kind), list, home.owed, home.showAdder && !easy) }
+                        if (home.given.isNotEmpty()) LoanGroup(t("home.gave", "Money I gave"), home.given, home.owed, home.showAdder && !easy)
                         if (home.priv.loans.isNotEmpty()) PrivateGroup(home.priv, home.owed)
                         if (home.closed.isNotEmpty()) ClosedGroup(home.closed, closedOpen) { closedOpen = !closedOpen }
                     }
@@ -215,22 +239,39 @@ private fun DueSection(due: List<Obj>, onPay: (String, String?) -> Unit, onOpen:
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DueRow(loan: Obj, date: String, amount: Double, overdue: Boolean, tag: String?, given: Boolean, note: String?, onPay: () -> Unit, onOpen: () -> Unit) {
     val s = LocalSemantic.current
-    Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(start = 16.dp, end = 12.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f).pressable(onClick = onOpen).padding(vertical = 4.dp)) {
-            Text(loan.s("name"), style = Apple.type.body.copy(fontWeight = FontWeight.SemiBold), color = Apple.colors.label, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (overdue) { Pill(t("home.overdue", "Overdue"), s.negative); Spacer(Modifier.width(8.dp)) }
+    val easy = LocalEasy.current
+    val stacked = bigText()
+    val label = if (given) t("home.received", "Received") else t("home.pay", "Pay")
+    val details: @Composable (Modifier) -> Unit = { m ->
+        Column(m.pressable(onClick = onOpen).padding(vertical = 4.dp)) {
+            Text(loan.s("name"), style = Apple.type.body.copy(fontWeight = FontWeight.SemiBold), color = Apple.colors.label)
+            // an overdue payment is a pill and a red date; the date wraps under the pill when there is no room beside it
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.Center) {
+                if (overdue) Pill(t("home.overdue", "Overdue"), s.negative, Modifier.align(Alignment.CenterVertically))
                 val when_ = dateInWords(date)
-                Text(if (tag != null) "$tag · $when_" else when_, style = Apple.type.subheadline, color = if (overdue) s.negative else Apple.colors.secondaryLabel, maxLines = 1)
+                Text(if (tag != null) "$tag · $when_" else when_, style = Apple.type.subheadline, color = if (overdue) s.negative else Apple.colors.secondaryLabel)
             }
-            Money(amount, style = Apple.type.title3, color = Apple.colors.label)
+            // the amount is the big figure of the row
+            Money(amount, style = if (easy) Apple.type.title2 else Apple.type.title3, color = Apple.colors.label)
             if (note != null) Text(note, style = Apple.type.footnote, color = Apple.colors.secondaryLabel)
         }
-        Spacer(Modifier.width(12.dp))
-        SecondaryButton(if (given) t("home.received", "Received") else t("home.pay", "Pay"), onPay, Modifier.heightIn(min = 48.dp).widthIn(min = 72.dp))
+    }
+    if (stacked) {
+        // large text or Easy mode: the details, then a full-width Pay button under them
+        Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            details(Modifier)
+            SecondaryButton(label, onPay, Modifier.fillMaxWidth())
+        }
+    } else {
+        Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(start = 16.dp, end = 12.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            details(Modifier.weight(1f))
+            Spacer(Modifier.width(12.dp))
+            SecondaryButton(label, onPay, Modifier.heightIn(min = 48.dp).widthIn(min = 72.dp))
+        }
     }
 }
 
@@ -258,7 +299,8 @@ private fun PrivateGroup(p: PrivateLoans, owed: Map<String, Double>) {
     ).joinToString(" · ")
     AGroup(
         title = t("home.private", "Only on this phone"), footer = t("home.private.foot", "Your family doesn't see these."),
-        trailingHead = { Text(total, style = Apple.type.subheadline, maxLines = 1) },
+        // Easy mode drops the totals in the header (the figure above already says it)
+        trailingHead = if (LocalEasy.current) null else ({ Text(total, style = Apple.type.subheadline, maxLines = 1) }),
     ) {
         p.loans.forEach { l ->
             item {

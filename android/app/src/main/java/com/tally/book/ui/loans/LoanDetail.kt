@@ -28,6 +28,8 @@ import com.tally.book.ui.SubScreen
 import com.tally.book.ui.components.*
 import com.tally.book.ui.theme.Apple
 import com.tally.book.ui.theme.LocalSemantic
+import com.tally.book.ui.theme.LocalEasy
+import com.tally.book.ui.theme.stackGap
 import kotlinx.coroutines.launch
 
 /* A loan: what is left, what is next, the payments, the documents, and the few things you can do to it. */
@@ -104,7 +106,7 @@ private fun LoanBody(id: String, d: Detail) {
     SubScreen(loan.s("name")) { pad ->
         Column(
             Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(ScreenPadding),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(stackGap()),
         ) {
             val kindLine = listOf(loanKindLabel(loan), loan.s("lender")).filter { it.isNotBlank() }.joinToString(" · ")
             val subtitle = kindLine + "\n" + addedByLine(loan.s("by"), loan.num("at"), loan.s("updatedBy"), ::memberName) { fmtISODate(isoOfMillis(it)) }
@@ -301,11 +303,12 @@ private fun PaymentsGroup(d: Detail, given: Boolean, onEdit: (Obj) -> Unit) {
         if (d.payments.isEmpty()) item { NoteRow(t("pay.none", "No payments yet.")) }
         d.payments.forEach { p ->
             item {
-                SwipeRow(enabled = true, onDelete = { deletePaymentWithUndo(p) }) { _, _ ->
+                // Easy mode has no swipe: a payment is deleted with the Delete button in its sheet
+                SwipeRow(enabled = !LocalEasy.current, onDelete = { deletePaymentWithUndo(p) }) { _, _ ->
                     ARow(
                         payKindLabel(p.s("kind"), d.loan.s("kind"), given),
                         sub = t("pay.rowSub", "{date} · by {name}", "date" to fmtISODate(p.s("date")), "name" to memberName(p.s("by"))),
-                        money = p.num("amount"), moneyColor = Apple.colors.label, onClick = { onEdit(p) },
+                        money = p.num("amount"), moneyColor = Apple.colors.label, onClick = { onEdit(p) }, chevron = LocalEasy.current,
                         trailing = if (p.s("id") in d.attached) ({ Icon(Icons.Rounded.AttachFile, t("pay.hasFiles", "Has attachments"), Modifier.size(18.dp), tint = Apple.colors.secondaryLabel) }) else null,
                     )
                 }
@@ -315,7 +318,7 @@ private fun PaymentsGroup(d: Detail, given: Boolean, onEdit: (Obj) -> Unit) {
 }
 
 /** Deletes a payment and offers Undo (the files' bytes are kept for a while so Undo can bring them back too). Always true: the row is gone. */
-private suspend fun deletePaymentWithUndo(p: Obj): Boolean {
+internal suspend fun deletePaymentWithUndo(p: Obj): Boolean {
     val id = p.s("id")
     val snap = p.copyObj()
     val files = filesOf("payment", id).map { it.copyObj() }

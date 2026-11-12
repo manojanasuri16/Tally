@@ -79,6 +79,9 @@ object SyncText {
 
     /** What the quiet line under the figure says, and whether tapping it does something. */
     class Line(val text: String, val action: Action)
+
+    /** Whether the status [line] says something the person should act on (a failed sync, waiting to be let in, an old family to set up). Easy mode shows the line only then. */
+    fun needsAttention(line: Line, oldFamily: Boolean): Boolean = line.action == Action.RETRY || (line.action == Action.SET_UP && oldFamily)
     enum class Action { NONE, SET_UP, RETRY }
 
     fun status(state: SyncState, hasFamily: Boolean, lastAt: Long, nowMs: Long, joining: Boolean = false, oldFamily: Boolean = false): Line = when {

@@ -42,6 +42,8 @@ import com.tally.book.ui.lock.LockFlow
 import com.tally.book.ui.theme.Apple
 import com.tally.book.ui.theme.LocalSemantic
 import com.tally.book.ui.theme.ThemeMode
+import com.tally.book.ui.theme.EasyMode
+import com.tally.book.ui.theme.stackGap
 import kotlinx.coroutines.launch
 
 /*
@@ -73,7 +75,7 @@ fun FamilyScreen() {
     SubScreen(t("family.title", "Family")) { pad ->
         Column(
             Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(ScreenPadding),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(stackGap()),
         ) {
             if (view.inFamily) JoinRequestCards()
             when {
@@ -83,6 +85,7 @@ fun FamilyScreen() {
                 view.inFamily -> InFamily(view, onInvite = { inviting = true })
                 else -> NoFamily(onStart = { starting = true })
             }
+            EasyModeGroup()
             MyNameGroup()
             LanguageGroup()
             AppearanceGroup()
@@ -185,6 +188,20 @@ fun JoinScreen() {
 }
 
 // ---------- for everyone ----------
+
+/** Easy mode: bigger text and fewer choices. A device setting: it applies at once, everywhere, and is not in the book, not synced and not in a backup. */
+@Composable
+private fun EasyModeGroup() {
+    AGroup {
+        item {
+            SwitchRow(
+                t("easy.title", "Easy mode"), EasyMode.on, { EasyMode.set(it) },
+                Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                subtitle = t("easy.sub", "Bigger text and fewer choices"), icon = Icons.Rounded.TextFields,
+            )
+        }
+    }
+}
 
 @Composable
 private fun MyNameGroup() {

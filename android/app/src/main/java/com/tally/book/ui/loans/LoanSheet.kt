@@ -24,6 +24,7 @@ import com.tally.book.model.*
 import com.tally.book.ui.components.*
 import com.tally.book.ui.theme.Apple
 import com.tally.book.ui.theme.AppleShapes
+import com.tally.book.ui.theme.LocalEasy
 
 /*
  * Add or edit a loan, in a sheet. The kind comes first as three large choices; then only that kind's fields, in the order a person
@@ -67,6 +68,9 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
 
     val pickers = rememberAttachPickers { p -> pending.add(p); showDetails = true }
     val words = loanWords(given)
+    // Easy mode: only the essential questions. What a loan being edited already uses stays on screen (EasyForm.extrasOf).
+    val easy = LocalEasy.current
+    val extras = remember { EasyForm.extrasOf(existing) }
     val effEvery = every ?: if (kind == "gold") "year" else "month"
 
     val hasInterest = LoanFormRules.hasInterest(kind, interest)
@@ -109,6 +113,7 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
     }
     val paidShown = LoanFormRules.showPaidUpTo(editing, existingPaidUpTo, suggestion)
     val paidValue = if (!paidShown) "" else if (paidTouched) paidUpTo else suggestion
+    // (in Easy mode the field is not drawn for a new loan, but the suggestion still applies: an old loan never shows years of pending payments)
 
     fun build(): Obj {
         val d = core()
@@ -182,16 +187,20 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
                     if (kind == "bank" || !perMonth) t("loan.rate.year.label", "Interest rate (% a year)") else t("loan.rate.month.label", "Interest rate (% a month)"),
                     keyboard = KeyboardType.Decimal, placeholder = "0",
                 )
-                SegmentedControl(
-                    listOf("reducing" to t("loan.method.choice.reducing", "Reducing"), "flat" to t("loan.method.choice.flat", "Flat")),
-                    method, { method = it; error = null },
-                )
-                Hint(interestMethodHelp(method))
+                if (EasyForm.showMethod(easy, hasInterest, extras)) {
+                    SegmentedControl(
+                        listOf("reducing" to t("loan.method.choice.reducing", "Reducing"), "flat" to t("loan.method.choice.flat", "Flat")),
+                        method, { method = it; error = null },
+                    )
+                    Hint(interestMethodHelp(method))
+                }
             }
             if (kind == "bank") {
-                FieldTitle(t("loan.frequency", "How often do you pay?"))
-                ChoiceChips(FREQUENCIES.map { it to frequencyLabel(it) }, frequency, { frequency = it; error = null })
-                if (LoanFormRules.showWeekday(kind, frequency)) Hint(instalmentDayInWords(core()))
+                if (EasyForm.showFrequency(easy, kind, extras)) {
+                    FieldTitle(t("loan.frequency", "How often do you pay?"))
+                    ChoiceChips(FREQUENCIES.map { it to frequencyLabel(it) }, frequency, { frequency = it; error = null })
+                    if (LoanFormRules.showWeekday(kind, frequency)) Hint(instalmentDayInWords(core()))
+                }
                 val monthly = frequency == "month"
                 MoneyField(
                     emi, { emi = it; error = null },
@@ -200,10 +209,10 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
                     else t("loan.emi.help.count", "If you do not know it, leave it empty and give the number of payments."),
                 )
                 TextInput(tenure, { tenure = digitsOnly(it); error = null }, LoanFormRules.tenureLabel(frequency), keyboard = KeyboardType.Number, placeholder = t("loan.tenure.eg", "e.g. 24"))
-                if (LoanFormRules.showDueDay(kind, frequency))
+                if (EasyForm.showDueDay(easy, kind, frequency, extras))
                     TextInput(dueDay, { dueDay = digitsOnly(it).take(2); dueDayTouched = true; error = null }, t("loan.dueDay", "Pay on this day of the month"), keyboard = KeyboardType.Number, placeholder = "5")
             } else {
-                if (hasInterest) {
+                if (EasyForm.showEvery(easy, kind, hasInterest, extras)) {
                     FieldTitle(t("loan.every", "Interest is paid"))
                     SegmentedControl(listOf("month" to t("loan.everyMonth", "Every month"), "year" to t("loan.everyYear", "Every year")), effEvery, { every = it })
                 }
@@ -213,9 +222,11 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
                     Hint(t("loan.repayBy.gold.hint", "Gold loans usually must be repaid or renewed within 12 months."))
                 }
             }
-            if (paidShown) {
+            if (EasyForm.showPaidUpToField(easy, paidShown, extras)) {
                 DateField(paidValue, { paidUpTo = it; paidTouched = true; error = null }, t("loan.paidUpTo", "Paid up to"), clearable = true)
                 Hint(t("loan.paidUpTo.help", "Everything due until this date counts as paid. Change it if some payments were missed."))
+            } else if (EasyForm.paidUpToNote(easy, editing, suggestion)) {
+                Hint(t("easy.paidUpTo.note", "Payments up to {date} are counted as already paid.", "date" to fmtISODate(paidValue)))
             }
             if (!showDetails) {
                 PlainButton(t("pay.addDetails", "Add details"), { showDetails = true }, Modifier.align(Alignment.Start), bold = true)
