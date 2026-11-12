@@ -5,8 +5,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.Modifier
@@ -263,7 +266,8 @@ fun qrMatrix(text: String): Array<IntArray> {
 fun QrCode(text: String, modifier: Modifier = Modifier, size: Dp = 220.dp) {
     // Choosing a mask now reads each candidate back with ZXing (tens to hundreds of ms on a phone), so build it off the main thread;
     // the white square keeps its place meanwhile, so nothing jumps when the code appears.
-    val m by produceState<Array<IntArray>?>(null, text) { value = withContext(Dispatchers.Default) { runCatching { qrMatrix(text) }.getOrNull() } }
+    var m by remember(text) { mutableStateOf<Array<IntArray>?>(null) }
+    LaunchedEffect(text) { m = withContext(Dispatchers.Default) { runCatching { qrMatrix(text) }.getOrNull() } }
     Canvas(modifier.size(size).background(Color.White).padding(8.dp)) {
         val m = m ?: return@Canvas
         val cell = this.size.width / m.size
