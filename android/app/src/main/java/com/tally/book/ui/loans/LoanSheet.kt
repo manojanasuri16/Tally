@@ -140,7 +140,7 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
             )
             if (kind == "bank") {
                 MoneyField(emi, { emi = it; error = null }, t("loan.emi", "EMI (the monthly payment)"), supporting = t("loan.emi.help", "If you do not know it, leave it empty and give the number of months."))
-                TextInput(tenure, { tenure = digitsOnly(it); error = null }, t("loan.tenure", "Number of months"), keyboard = KeyboardType.Number, placeholder = "12")
+                TextInput(tenure, { tenure = digitsOnly(it); error = null }, t("loan.tenure", "Number of months"), keyboard = KeyboardType.Number, placeholder = t("loan.tenure.eg", "e.g. 24"))
                 TextInput(dueDay, { dueDay = digitsOnly(it).take(2); dueDayTouched = true; error = null }, t("loan.dueDay", "Pay on this day of the month"), keyboard = KeyboardType.Number, placeholder = "5")
             } else {
                 if (hasInterest) {

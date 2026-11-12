@@ -301,6 +301,7 @@
   "loan.startDate.given": "ఇచ్చిన తేదీ",
   "loan.taken": "తీసుకున్న తేదీ",
   "loan.tenure": "నెలల సంఖ్య",
+  "loan.tenure.eg": "ఉదా. 24",
   "loan.title": "రుణం",
   "loan.which": "ఇది ఏ రకమైన రుణం?",
   "lock.atLeastDots": "కనీసం నాలుగు చుక్కలు, పునరావృతం లేకుండా.",

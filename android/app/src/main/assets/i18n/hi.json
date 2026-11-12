@@ -301,6 +301,7 @@
   "loan.startDate.given": "देने की तारीख",
   "loan.taken": "लेने की तारीख",
   "loan.tenure": "महीनों की संख्या",
+  "loan.tenure.eg": "जैसे 24",
   "loan.title": "कर्ज़",
   "loan.which": "यह किस तरह का कर्ज़ है?",
   "lock.atLeastDots": "कम से कम चार बिंदु, दोहराव नहीं।",
