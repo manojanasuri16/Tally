@@ -80,18 +80,15 @@ private fun RootScreen() {
 
 // ---------- welcome ----------
 
-/** First run: one question. */
+/** First run: one question (the name). Easy mode is only turned on from its switch on the Family page. */
 @Composable
 fun WelcomeScreen() {
     var name by remember { mutableStateOf("") }
-    // After the name, once: "Make Tally bigger and simpler?" (skipped when Easy mode is already on). The name is saved by whichever answer is chosen.
-    var offering by remember { mutableStateOf(false) }
     val haptics = rememberHaptics()
     val question = t("welcome.name", "What is your name?")
     val restore = restorePicker?.invoke()
-    fun finish(easy: Boolean) {
+    fun finish() {
         haptics.confirm()
-        if (easy) EasyMode.set(true)
         Ledger.edit { setMyName(name) }
     }
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).windowInsetsPadding(WindowInsets.safeDrawing)) {
@@ -99,21 +96,11 @@ fun WelcomeScreen() {
             Modifier.align(Alignment.Center).widthIn(max = 480.dp).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            if (!offering) {
-                Text(question, style = Apple.type.title1, color = Apple.colors.label, modifier = Modifier.semantics { contentDescription = question })
-                TextInput(name, { name = it }, "", placeholder = t("welcome.placeholder", "Your name"))
-                PrimaryButton(t("welcome.continue", "Continue"), {
-                    if (EasyMode.on) finish(false) else { haptics.confirm(); offering = true }
-                }, Modifier.fillMaxWidth(), enabled = name.isNotBlank())
-                // a new phone: bring the book back instead of starting again
-                if (restore != null) PlainButton(t("welcome.haveBackup", "I have a backup"), restore, Modifier.align(Alignment.CenterHorizontally))
-            } else {
-                val ask = t("easy.offer.title", "Make Tally bigger and simpler?")
-                Text(ask, style = Apple.type.title1, color = Apple.colors.label, modifier = Modifier.semantics { contentDescription = ask })
-                Text(t("easy.offer.body", "Bigger text and fewer choices. You can change this later on the Family page."), style = Apple.type.body, color = Apple.colors.secondaryLabel)
-                PrimaryButton(t("easy.offer.yes", "Yes, make it easy"), { finish(true) }, Modifier.fillMaxWidth())
-                SecondaryButton(t("easy.offer.no", "No, thanks"), { finish(false) }, Modifier.fillMaxWidth())
-            }
+            Text(question, style = Apple.type.title1, color = Apple.colors.label, modifier = Modifier.semantics { contentDescription = question })
+            TextInput(name, { name = it }, "", placeholder = t("welcome.placeholder", "Your name"))
+            PrimaryButton(t("welcome.continue", "Continue"), { finish() }, Modifier.fillMaxWidth(), enabled = name.isNotBlank())
+            // a new phone: bring the book back instead of starting again
+            if (restore != null) PlainButton(t("welcome.haveBackup", "I have a backup"), restore, Modifier.align(Alignment.CenterHorizontally))
         }
     }
 }

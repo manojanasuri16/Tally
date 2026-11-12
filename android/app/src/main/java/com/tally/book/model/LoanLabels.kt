@@ -18,12 +18,13 @@ fun kindLabel(kind: String?): String = when (kind) {
  */
 fun loanKindLabel(loan: Obj): String = when {
     isGiven(loan) -> t("loan.kind.given", "To a person")
-    loan.s("kind") == "gold" -> securedTitle(pledgeOf(loan))
+    loan.s("kind") == "gold" -> securedTitle(pledgeOf(loan), pledgeTextOf(loan))
     else -> kindLabel(loan.s("kind"))
 }
 
 /** What is pledged, as a choice: "Gold", "LIC policy", "Fixed deposit", "Land papers", "Nothing pledged". */
-fun pledgeLabel(pledge: String?): String = when (pledge) {
+fun pledgeLabel(pledge: String?, text: String? = null): String = when (pledge) {
+    "other" -> text?.trim().orEmpty().ifEmpty { t("pledge.other", "Something else") }   // typed by the person: never translated
     "lic" -> t("pledge.lic", "LIC policy")
     "fd" -> t("pledge.fd", "Fixed deposit")
     "land" -> t("pledge.land", "Land papers")
@@ -32,7 +33,8 @@ fun pledgeLabel(pledge: String?): String = when (pledge) {
 }
 
 /** A loan against something, named the way people say it: "Gold loan", "Loan against LIC policy", "Loan against FD", "Loan against land papers", "Crop / other loan". */
-fun securedTitle(pledge: String?): String = when (pledge) {
+fun securedTitle(pledge: String?, text: String? = null): String = when (pledge) {
+    "other" -> text?.trim().orEmpty().let { if (it.isEmpty()) t("loan.title.other", "Loan against something else") else t("loan.title.pledgeText", "Loan against {what}", "what" to it) }
     "lic" -> t("loan.title.lic", "Loan against LIC policy")
     "fd" -> t("loan.title.fd", "Loan against FD")
     "land" -> t("loan.title.land", "Loan against land papers")

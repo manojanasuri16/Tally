@@ -256,13 +256,24 @@ class LoanRulesTest {
     @Test fun pledgeLabelsAndTitles() {
         val titles = PLEDGES.associateWith { securedTitle(it) }
         assertEquals(mapOf("gold" to "Gold loan", "lic" to "Loan against LIC policy", "fd" to "Loan against FD", "land" to "Loan against land papers",
-            "none" to "Crop / other loan"), titles)
-        assertEquals(listOf("Gold", "LIC policy", "Fixed deposit", "Land papers", "Nothing pledged"), PLEDGES.map { pledgeLabel(it) })
+            "none" to "Crop / other loan", "other" to "Loan against something else"), titles)
+        assertEquals(listOf("Gold", "LIC policy", "Fixed deposit", "Land papers", "Nothing pledged", "Something else"), PLEDGES.map { pledgeLabel(it) })
         assertEquals("Loan against something", kindLabel("gold"))
         val lic = saveLoan(obj("kind" to "gold", "pledge" to "lic", "name" to "Policy", "principal" to 20000, "rate" to 10, "startDate" to "2026-01-01"))
         assertEquals("Loan against LIC policy", loanKindLabel(lic))
         assertEquals("Gold loan", loanKindLabel(obj("kind" to "gold")))   // pledge defaults to gold
         assertEquals("lic", v(lic).s("pledge")); assertEquals(0.0, v(lic).num("grams"), 0.0)
+    }
+
+    @Test fun somethingElseIsNamedByThePerson() {
+        assertEquals("Silver", pledgeLabel("other", " Silver "))
+        assertEquals("Loan against Silver", securedTitle("other", "Silver"))
+        val o = saveLoan(obj("kind" to "gold", "pledge" to "other", "pledgeText" to "  Silver  ", "name" to "Bangles", "principal" to 20000, "rate" to 10, "startDate" to "2026-01-01"))
+        assertEquals("Loan against Silver", loanKindLabel(o))
+        assertEquals("Loan against Silver", loanKindLabel(JsonCodec.parseObj(JsonCodec.stringify(o))))   // survives a save and reload
+        assertEquals("other", v(o).s("pledge")); assertEquals("Silver", v(o).s("pledgeText")); assertEquals(0.0, v(o).num("grams"), 0.0)
+        assertEquals("Silver", pledgeLabel(v(o).s("pledge"), v(o).s("pledgeText")))
+        assertEquals("", pledgeTextOf(obj("kind" to "gold", "pledge" to "lic", "pledgeText" to "Silver")))
     }
 
     // Gold loan, 50,000 at 12% a year, interest monthly (500), from 15 Dec 2025, repay or renew by 30 Nov 2026. All interest paid
@@ -350,6 +361,11 @@ class LoanRulesTest {
         assertEquals("Please choose what the loan is taken against.", validateLoan(g("pledge" to "car")))
         assertEquals("Grams are only for a gold loan.", validateLoan(g("pledge" to "fd", "grams" to 10)))
         assertNull(validateLoan(g("grams" to 10)))
+        assertEquals("Please say what is pledged.", validateLoan(g("pledge" to "other")))
+        assertEquals("Please say what is pledged.", validateLoan(g("pledge" to "other", "pledgeText" to "   ")))
+        assertNull(validateLoan(g("pledge" to "other", "pledgeText" to "Silver")))
+        assertNull(validateLoan(g("pledge" to "other", "pledgeText" to "x".repeat(40))))
+        assertEquals("Please keep it to 40 letters or fewer.", validateLoan(g("pledge" to "other", "pledgeText" to "x".repeat(41))))
         assertEquals("The date to repay by must be after the loan started.", validateLoan(g("repayBy" to "2026-01-01")))
         assertEquals("The date to repay by must be after the loan started.",
             validateLoan(obj("kind" to "hand", "name" to "x", "principal" to 5, "startDate" to "2026-03-01", "repayBy" to "2026-02-01")))

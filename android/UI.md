@@ -221,7 +221,7 @@ The app must work at font scale 1.3, 1.5 and 2.0 in English, Telugu and Hindi. T
 
 ## Easy mode
 
-A device setting (`EasyMode`, `DevicePrefs` `tally-easy`, `ui/theme/EasyMode.kt`): not in the book, not synced, not in a backup, and applied at once (it is Compose state read in `MainActivity`, so the lock screen follows too). The switch is the first row of the Family page's settings; the welcome screen offers it once after the name. What the app is told: `Appearance(easy = true, fontScale = 1.3f)`, `LocalEasy`, and a stronger `AppleColors`.
+A device setting (`EasyMode`, `DevicePrefs` `tally-easy`, `ui/theme/EasyMode.kt`): not in the book, not synced, not in a backup, and applied at once (it is Compose state read in `MainActivity`, so the lock screen follows too). The switch is the first row of the Family page's settings; the welcome screen does not offer it (it asks only for the name). What the app is told: `Appearance(easy = true, fontScale = 1.3f)`, `LocalEasy`, and a stronger `AppleColors`.
 
 - **Scale.** `EasyRules.scale(system, extra)` = the phone's font scale times 1.3, never above **2.0** and never below the phone's own scale (1.0 gives 1.3, 1.15 gives 1.5, 1.3 gives 1.69, 1.5 gives 1.95, 1.54 and up give 2.0; a phone already above 2.0 is left alone). `TallyTheme` provides the result as `LocalDensity`'s font scale, so every `sp` follows.
 - **Sizes.** Touch targets are at least 56 dp (`touchMin`): rows, buttons (the primary button 60), bar icons, the sheet's X, segmented and capsule choices, alert buttons, the toast. Row padding, the gutter (20) and the gap between cards (18) grow; icon tiles are 38 dp, switches 1.25x, amounts in rows are bold.

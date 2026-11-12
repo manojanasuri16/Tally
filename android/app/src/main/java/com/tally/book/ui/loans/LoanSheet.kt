@@ -47,6 +47,7 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
     var method by remember { mutableStateOf(existing?.let { interestMethod(it) } ?: "reducing") }
     var frequency by remember { mutableStateOf(existing?.let { frequencyOf(it) } ?: "month") }
     var pledge by remember { mutableStateOf(existing?.takeIf { it.s("kind") == "gold" }?.let { pledgeOf(it) } ?: "gold") }
+    var pledgeText by remember { mutableStateOf(existing?.let { pledgeTextOf(it) }.orEmpty()) }
     val existingPaidUpTo = remember { existing?.s("paidUpTo").orEmpty() }
     var paidUpTo by remember { mutableStateOf(existingPaidUpTo) }
     var paidTouched by remember { mutableStateOf(editing) }
@@ -98,6 +99,7 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
             if (kind == "gold") {
                 d["pledge"] = pledge
                 if (pledge == "gold") d["grams"] = n(grams) else d.remove("grams")
+                if (pledge == "other") d["pledgeText"] = pledgeText.trim() else d.remove("pledgeText")
             }
         }
         if (LoanFormRules.repayByApplies(kind)) {
@@ -150,6 +152,10 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
             if (LoanFormRules.showPledge(kind)) {
                 FieldTitle(t("loan.pledge", "What is pledged?"))
                 ChoiceChips(PLEDGES.map { it to pledgeLabel(it) }, pledge, { pledge = it; error = null })
+                if (pledge == "other") TextInput(
+                    pledgeText, { pledgeText = it.take(PLEDGE_TEXT_MAX); error = null }, t("loan.pledgeText", "What is pledged?"),
+                    placeholder = t("loan.pledgeText.ph", "e.g. Silver, vehicle papers"),
+                )
             }
             TextInput(name, { name = it; error = null }, t("loan.name", "Name"), placeholder = when (kind) {
                 "gold" -> t("loan.name.eg.gold", "e.g. Gold loan")

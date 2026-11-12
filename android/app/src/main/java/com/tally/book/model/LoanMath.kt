@@ -23,7 +23,7 @@ import kotlin.math.pow
 
 val INTEREST_METHODS = listOf("reducing", "flat")
 val FREQUENCIES = listOf("month", "fortnight", "week", "day")
-val PLEDGES = listOf("gold", "lic", "fd", "land", "none")
+val PLEDGES = listOf("gold", "lic", "fd", "land", "none", "other")
 
 /** "reducing" (default: interest on what is still owed) or "flat" (interest on the original amount for the whole loan). */
 fun interestMethod(loan: Obj): String = if (loan.s("interestMethod") == "flat") "flat" else "reducing"
@@ -34,8 +34,14 @@ fun frequencyOf(loan: Obj): String = loan.s("frequency").takeIf { it in FREQUENC
 /** Instalments in a year: 12, 26, 52 or 365. The periodic rate is the yearly rate divided by this. */
 fun perYear(frequency: String): Int = when (frequency) { "fortnight" -> 26; "week" -> 52; "day" -> 365; else -> 12 }
 
-/** What a gold-kind loan is taken against: "gold" (default), "lic", "fd", "land" or "none". */
+/** What a gold-kind loan is taken against: "gold" (default), "lic", "fd", "land", "none" or "other" (named by `pledgeText`). */
 fun pledgeOf(loan: Obj): String = loan.s("pledge").takeIf { it in PLEDGES } ?: "gold"
+
+/** The longest `pledgeText`. */
+const val PLEDGE_TEXT_MAX = 40
+
+/** What the person typed for a pledge of "other" (trimmed, at most [PLEDGE_TEXT_MAX]); empty for any other pledge. */
+fun pledgeTextOf(loan: Obj): String = if (pledgeOf(loan) == "other") loan.s("pledgeText").trim().take(PLEDGE_TEXT_MAX) else ""
 
 /** The number of instalments a bank loan was agreed for (`tenure`); 0 when not given. */
 fun tenureOf(loan: Obj): Int = max(0, loan.num("tenure").toInt())

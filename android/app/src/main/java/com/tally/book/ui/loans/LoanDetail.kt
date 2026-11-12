@@ -245,7 +245,7 @@ private fun Facts(loan: Obj, v: Obj) {
                 item { ARow(t("loan.rate", "Interest rate"), value = rateWithMethodInWords(loan.num("rate"), loan.s("rateUnit"), v.s("interestMethod"))) }
                 item { ARow(t("loan.interestPaid", "Interest is paid"), value = everyInWords(v.s("interestEvery").ifEmpty { interestEvery(loan) }).lowercase()) }
             }
-            if (kind == "gold") item { ARow(t("loan.pledged", "Pledged"), value = pledgeLabel(v.s("pledge"))) }
+            if (kind == "gold") item { ARow(t("loan.pledged", "Pledged"), value = pledgeLabel(v.s("pledge"), v.s("pledgeText"))) }
             if (kind == "gold" && v.num("grams") > 0) item { ARow(t("loan.gold", "Gold"), value = t("loan.grams.value", "{g} grams", "g" to gram(v.num("grams")))) }
             if (v.num("renewals") > 0) item {
                 ARow(

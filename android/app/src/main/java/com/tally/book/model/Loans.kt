@@ -121,7 +121,7 @@ fun loanView(loan: Obj, payments: List<Obj>, today: LocalDate): Obj {
         v["renewals"] = rn.size.toDouble(); v["lastRenewal"] = rn.maxOfOrNull { it.s("date") } ?: ""
     }
     if (kind == "gold") {
-        v["pledge"] = pledgeOf(loan)
+        v["pledge"] = pledgeOf(loan); v["pledgeText"] = pledgeTextOf(loan)
         v["grams"] = if (pledgeOf(loan) == "gold") loan.num("grams") else 0.0
     }
     return v
@@ -247,6 +247,11 @@ fun validateLoan(draft: Obj): String? {
     if (kind == "gold") {
         val p = draft.s("pledge")
         if (p.isNotEmpty() && p !in PLEDGES) return t("loan.err.pledge", "Please choose what the loan is taken against.")
+        if (p == "other") {
+            val what = draft.s("pledgeText").trim()
+            if (what.isEmpty()) return t("loan.err.pledgeText", "Please say what is pledged.")
+            if (what.length > PLEDGE_TEXT_MAX) return t("loan.err.pledgeText.long", "Please keep it to {n} letters or fewer.", "n" to PLEDGE_TEXT_MAX)
+        }
         if (draft.num("grams") < 0 || (draft.num("grams") > 0 && pledgeOf(draft) != "gold")) return t("loan.err.grams", "Grams are only for a gold loan.")
     }
     val dir = draft.s("direction")
