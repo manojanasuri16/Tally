@@ -60,6 +60,17 @@ object SyncText {
         SyncResult.OldFamily -> oldFamilyText()
     }
 
+    /**
+     * The sentence after renaming the family: "The family is now called X." when it worked, a plain reason when it did not
+     * ("Only a family admin can do that." for a member, a nudge for a bad name or a busy engine).
+     */
+    fun renameMessage(r: SyncResult, newName: String): String = when (r) {
+        is SyncResult.Done -> t("family.renamed", "The family is now called {name}.", "name" to newName)
+        SyncResult.BadInvite -> t("family.rename.bad", "Please give the family a name.")
+        SyncResult.Busy -> t("req.busy", "One moment, then try again.")
+        else -> message(r) ?: t("family.rename.failed", "The name could not be changed. Try again later.")
+    }
+
     /** A family made by 0.1.0/0.2.0: sharing has to be set up again. */
     fun oldFamilyText(): String = t("sync.oldFamily", "Sharing needs to be set up again after this update. Your loans stay on this phone.")
 

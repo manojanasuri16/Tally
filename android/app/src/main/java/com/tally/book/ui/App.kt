@@ -17,11 +17,14 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import kotlinx.coroutines.delay
 import com.tally.book.core.*
+import com.tally.book.data.DueNotices
 import com.tally.book.data.Ledger
 import com.tally.book.ui.components.*
 import com.tally.book.sync.Sync
 import com.tally.book.ui.family.FamilyBusy
+import com.tally.book.ui.family.FastJoinChecks
 import com.tally.book.ui.family.InviteIntake
 import com.tally.book.ui.family.familyGraph
 import com.tally.book.ui.loans.loansGraph
@@ -118,7 +121,16 @@ fun MainScaffold() {
         }
         InviteIntake()
         FamilyBusy()
+        FastJoinChecks()
+        DueCacheKeeper()
     }
+}
+
+/** Keeps the device copy of the due dates (data/DueNotices.kt) in step with the book, a moment after each change. */
+@Composable
+private fun DueCacheKeeper() {
+    val rev = rememberLedger()
+    LaunchedEffect(rev) { delay(1_500); runCatching { DueNotices.refreshCache() } }
 }
 
 /** The label of the "‹ Parent" back button: the screen this one was pushed from. */

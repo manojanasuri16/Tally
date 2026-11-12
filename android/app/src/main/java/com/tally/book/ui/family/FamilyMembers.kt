@@ -17,6 +17,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tally.book.MainActivity
 import com.tally.book.core.*
 import com.tally.book.sync.FamilyMember
+import com.tally.book.sync.Invite
 import com.tally.book.sync.InviteResult
 import com.tally.book.sync.MembershipView
 import com.tally.book.sync.Notices
@@ -38,6 +39,7 @@ fun InFamily(view: MembershipView, onInvite: () -> Unit) {
     val state by Sync.engine.state.collectAsStateWithLifecycle()
     val rev = rememberLedger()
     var picked by remember { mutableStateOf<String?>(null) }
+    var renaming by remember { mutableStateOf(false) }
     val lastAt = remember(rev, state) { Sync.lastSyncedAt() }
     val now = Clock.millis()
     val members = remember(view) { view.members.sortedByDescending { it.me } }
@@ -59,6 +61,7 @@ fun InFamily(view: MembershipView, onInvite: () -> Unit) {
     }
     AGroup {
         item { ARow(t("family.invite", "Invite someone"), icon = Icons.Rounded.PersonAdd, chevron = true, onClick = onInvite) }
+        if (view.iAmAdmin) item { ARow(t("family.rename", "Rename family"), icon = Icons.Rounded.Edit, chevron = true, onClick = { renaming = true }) }
         item {
             ARow(
                 t("family.syncNow", "Sync now"),
@@ -76,6 +79,7 @@ fun InFamily(view: MembershipView, onInvite: () -> Unit) {
             )
         }
     }
+    if (renaming && view.iAmAdmin) RenameSheet(view.familyName, onDismiss = { renaming = false }, onSave = { name -> renaming = false; scope.launch { FamilyFlow.renameFamily(name) } })
     // the sheet follows the list: a member removed meanwhile closes it
     val target = members.firstOrNull { it.id == picked }
     if (target != null) {
@@ -86,6 +90,23 @@ fun InFamily(view: MembershipView, onInvite: () -> Unit) {
                 MemberAction.REMOVE_ADMIN -> FamilyFlow.makeAdmin(target, false)
                 MemberAction.REMOVE -> FamilyFlow.remove(target)
             } } },
+        )
+    }
+}
+
+/** The family's name in a sheet; Save sends the new one (admins only: the row is not shown to anyone else). */
+@Composable
+private fun RenameSheet(current: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var name by remember { mutableStateOf(current) }
+    val clean = Invite.cleanName(name)
+    EditSheet(
+        t("family.rename", "Rename family"), onDismiss,
+        onSave = { clean?.let { onSave(it) } },
+        saveEnabled = clean != null && clean != current,
+    ) {
+        TextInput(
+            name, { name = it }, t("family.name.label", "Family name"),
+            supporting = t("family.rename.help", "Everyone in your family will see the new name."),
         )
     }
 }

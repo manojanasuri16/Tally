@@ -215,6 +215,13 @@ object FamilyFlow {
         if (text != null) Dialogs.snack(text)
     }
 
+    /** An admin renames the family; the new name reaches everyone on their next sync. Says what happened in one plain sentence. */
+    suspend fun renameFamily(name: String) {
+        val clean = Invite.cleanName(name) ?: run { Dialogs.snack(SyncText.renameMessage(SyncResult.BadInvite, name)); return }
+        val r = Sync.detached { Sync.engine.renameFamily(clean) }
+        Dialogs.snack(SyncText.renameMessage(r, clean))
+    }
+
     fun shownName(m: FamilyMember): String = m.name.ifBlank { memberName(m.id) }
 
     /** A refusal in plain words (the relay's rules: SyncText has the sentences), or a nudge when another change is running. */

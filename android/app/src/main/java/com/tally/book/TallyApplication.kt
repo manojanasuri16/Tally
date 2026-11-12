@@ -4,6 +4,7 @@ import android.app.Application
 import com.tally.book.core.DevicePrefs
 import com.tally.book.core.I18n
 import com.tally.book.data.Backups
+import com.tally.book.data.DueNotices
 import com.tally.book.data.FileStore
 import com.tally.book.data.Ledger
 import com.tally.book.sync.Notices
@@ -22,6 +23,7 @@ class TallyApplication : Application() {
         Bio.init(this)
         installSyncHooks()
         Notices.init(this)
+        DueNotices.init(this)
         // stored documents follow the lock (encrypted while a lock is set)
         Ledger.onStarted = { FileStore.filesAfterPersist() }
     }

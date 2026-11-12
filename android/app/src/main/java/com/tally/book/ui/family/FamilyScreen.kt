@@ -87,6 +87,7 @@ fun FamilyScreen() {
             LockGroup()
             BackupGroup()
             PrivacyGroup()
+            RemindersGroup()
             AGroup { item { ARow(t("app.version", "Version"), value = BuildConfig.VERSION_NAME) } }
         }
     }

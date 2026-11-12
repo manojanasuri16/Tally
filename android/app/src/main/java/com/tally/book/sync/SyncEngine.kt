@@ -174,6 +174,39 @@ class SyncEngine(
     /** Asks the relay whether the waiting join request was decided; enters the family if it was allowed. */
     suspend fun checkJoin(): SyncResult = exclusive { joinStep() ?: runSync() }
 
+    /** The relay's count of waiting requests the last time [refreshRequests] looked (-1 = not yet). */
+    @Volatile private var lastPending = -1
+
+    /**
+     * The cheap check for join requests while the app is open (an admin's phone): one small call that only counts them
+     * (`tally_pending`, the notice credential), and only when the count moved the family's state is read and the requests checked
+     * again, without pulling or pushing records. Never touches [state] (no "Syncing" flicker), never waits for a running sync, and
+     * says nothing about a failure. True when the list of [requests] changed.
+     */
+    suspend fun refreshRequests(): Boolean {
+        if (!lock.tryLock()) return false
+        try {
+            var fam = book.read { Membership.famOf(it) } ?: return false
+            if (!fam.admin || fam.waitingForKey) return false
+            val count = relay.pending(fam.id, fam.myId, fam.notice).orStop()
+            if (count == lastPending) return false
+            val before = _requests.value.map { it.id }
+            val st = refreshState(fam)
+            fam = book.read { Membership.famOf(it) } ?: return false
+            if (!fam.admin || fam.waitingForKey) return false
+            checkRequests(fam, st.requests)
+            lastPending = count
+            notices.update(NoticeCred(fam.id, fam.myId, fam.notice, fam.admin), _requests.value.size)
+            return _requests.value.map { it.id } != before
+        } catch (e: Stop) {
+            return false
+        } catch (e: SyncBook.SaveFailed) {
+            return false
+        } finally {
+            lock.unlock()
+        }
+    }
+
     /** Withdraws a waiting join request (best effort on the relay) and forgets it here. */
     suspend fun cancelJoin(): Boolean = withLockOrFalse {
         val j = book.read { it.o("joining")?.copyObj() } ?: return@withLockOrFalse true
@@ -412,7 +445,7 @@ class SyncEngine(
     suspend fun <T> paused(block: suspend () -> T): T = lock.withLock { block() }
 
     /** Forgets how the last sync ended (the book it was about has been replaced). */
-    fun resetState() { _state.value = SyncState(); _requests.value = emptyList(); checked.clear() }
+    fun resetState() { _state.value = SyncState(); _requests.value = emptyList(); checked.clear(); lastPending = -1 }
 
     // ---------- one refresh ----------
 

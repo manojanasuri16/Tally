@@ -19,6 +19,7 @@ import com.tally.book.data.Ledger
 import com.tally.book.model.DB
 import com.tally.book.model.UiHooks
 import com.tally.book.ui.TallyRoot
+import com.tally.book.ui.family.FastPoll
 import com.tally.book.ui.components.Dialogs
 import com.tally.book.ui.theme.Appearance
 import com.tally.book.ui.theme.TallyTheme
@@ -48,6 +49,9 @@ class MainActivity : FragmentActivity() {
         @Volatile var holdLock = false
         /** Intent extra: the screen to open (the join-request notification puts "family"). */
         const val EXTRA_OPEN = "tally-open"
+        /** True while the app is on screen (between onStart and onStop); the payment reminder is not posted then. */
+        @Volatile var visible = false
+            private set
     }
 
     private var stoppedAt = 0L
@@ -113,6 +117,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onStart() {
         super.onStart()
+        visible = true
         val away = SystemClock.elapsedRealtime() - stoppedAt
         // DB.lockDelay (seconds) mirrored to the device as "tally-relock-ms"
         val limit = DevicePrefs.get("tally-relock-ms")?.toLongOrNull() ?: (n(DB["lockDelay"]) * 1000).toLong()
@@ -124,9 +129,16 @@ class MainActivity : FragmentActivity() {
     }
 
     override fun onStop() {
+        visible = false
         stoppedAt = SystemClock.elapsedRealtime()
         if (Ledger.phase.value == Ledger.Phase.READY) Ledger.persistBlocking()
         super.onStop()
+    }
+
+    /** Every touch counts as "the person is here": the open app checks for join requests fast again (ui/family/FastJoin.kt). */
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean {
+        FastPoll.touch()
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onDestroy() {
