@@ -52,6 +52,8 @@ import com.tally.book.ui.theme.Apple
 import com.tally.book.ui.theme.LocalSemantic
 import com.tally.book.ui.theme.Motion
 import com.tally.book.ui.theme.Space
+import com.tally.book.ui.theme.LocalEasy
+import com.tally.book.ui.theme.capped
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -385,15 +387,16 @@ private fun PinPad(s: LockSession, onSubmit: (String) -> Unit) {
                 row.forEach { k ->
                     val alt = k == "x" || k == "ok"
                     Box(
-                        Modifier.size(76.dp).clip(CircleShape)
+                        Modifier.size(if (LocalEasy.current) 84.dp else 76.dp).clip(CircleShape)
                             .background(if (alt) Color.Transparent else c.fill)
                             .pressable(enabled = !s.busy, scaleTo = 0.9f, highlight = false, onLongClick = if (k == "x") ({ entry = "" }) else null) { press(k) },
                         contentAlignment = Alignment.Center,
                     ) {
                         when (k) {
                             "x" -> Icon(Icons.AutoMirrored.Rounded.Backspace, t("lock.backspaceHoldToClear", "Backspace — hold to clear"), tint = c.label)
-                            "ok" -> Text(okLabel, style = Apple.type.headline, color = c.accent, maxLines = 1)
-                            else -> Text(k, style = Apple.type.largeTitle.copy(fontWeight = FontWeight.Normal, fontFeatureSettings = "tnum"), color = c.label)
+                            // inside the round key the text stops growing at 1.3x: a bigger digit would be cut off by the circle
+                            "ok" -> Text(okLabel, style = Apple.type.headline.capped(1.3f), color = c.accent, textAlign = TextAlign.Center)
+                            else -> Text(k, style = Apple.type.largeTitle.capped(1.3f).copy(fontWeight = FontWeight.Normal, fontFeatureSettings = "tnum"), color = c.label)
                         }
                     }
                 }

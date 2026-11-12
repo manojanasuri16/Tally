@@ -43,6 +43,14 @@ import com.tally.book.ui.theme.AppleShapes
 import com.tally.book.ui.theme.LocalSemantic
 import com.tally.book.ui.theme.Motion
 import com.tally.book.ui.theme.Space
+import com.tally.book.ui.theme.LocalEasy
+import com.tally.book.ui.theme.bigText
+import com.tally.book.ui.theme.touchMin
+import com.tally.book.ui.theme.gutter
+import com.tally.book.ui.theme.stackGap
+import com.tally.book.ui.theme.capped
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.platform.LocalConfiguration
 
 /*
  * The Apple-style half of the kit: inset grouped lists (AGroup + ARow), the lead figure, pills and rings,
@@ -106,10 +114,12 @@ fun AGroup(title: String? = null, footer: String? = null, trailingHead: (@Compos
             trailingHead?.let { Box(Modifier.padding(end = 16.dp, bottom = 4.dp)) { Tinted { it() } } }
         }
     }
+    // Easy mode draws the icon tiles bigger, so a hairline that starts past an icon starts a little further in
+    val extra = if (LocalEasy.current) 8.dp else 0.dp
     InsetSurface {
         g.items.forEachIndexed { i, (inset, c) ->
             c()
-            if (i < g.items.lastIndex) Hairline(start = inset)
+            if (i < g.items.lastIndex) Hairline(start = if (inset > 16.dp) inset + extra else inset)
         }
     }
     if (footer != null) GroupFoot(footer)
@@ -130,16 +140,23 @@ fun ARow(
     onClick: (() -> Unit)? = null, trailing: (@Composable () -> Unit)? = null, leading: (@Composable () -> Unit)? = null,
 ) {
     val c = Apple.colors
-    val base = Modifier.fillMaxWidth().heightIn(min = 48.dp)
-    Row((if (onClick != null) base.pressable(onClick = onClick) else base).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (icon != null) { IconTile(icon, tint); Spacer(Modifier.width(14.dp)) }
+    val easy = LocalEasy.current
+    // With large text (the phone's own, or Easy mode) the amount or value goes under the title, so a long name keeps its room and nothing is cut off.
+    val stack = bigText() && (money != null || value != null)
+    val base = Modifier.fillMaxWidth().heightIn(min = touchMin(48.dp))
+    Row((if (onClick != null) base.pressable(onClick = onClick) else base).padding(horizontal = 16.dp, vertical = if (easy) 12.dp else 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (icon != null) { IconTile(icon, tint, size = if (easy) 38.dp else 30.dp); Spacer(Modifier.width(14.dp)) }
         else if (leading != null) { leading(); Spacer(Modifier.width(14.dp)) }
         Column(Modifier.weight(1f)) {
-            Text(title, style = Apple.type.body, color = if (titleColor == Color.Unspecified) c.label else titleColor, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (!sub.isNullOrEmpty()) Text(sub, style = Apple.type.footnote, color = if (subColor == Color.Unspecified) c.secondaryLabel else subColor, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(title, style = Apple.type.body, color = if (titleColor == Color.Unspecified) c.label else titleColor)
+            if (!sub.isNullOrEmpty()) Text(sub, style = Apple.type.footnote, color = if (subColor == Color.Unspecified) c.secondaryLabel else subColor)
+            if (stack) {
+                if (money != null) Money(money, style = Apple.type.body, color = if (moneyColor == Color.Unspecified) c.secondaryLabel else moneyColor, fontWeight = if (easy) FontWeight.Bold else null)
+                else if (value != null) Text(value, style = Apple.type.body, color = if (valueColor == Color.Unspecified) c.secondaryLabel else valueColor)
+            }
         }
-        if (money != null) { Spacer(Modifier.width(10.dp)); Money(money, style = Apple.type.body, color = if (moneyColor == Color.Unspecified) c.secondaryLabel else moneyColor) }
-        else if (value != null) { Spacer(Modifier.width(10.dp)); Text(value, style = Apple.type.body, color = if (valueColor == Color.Unspecified) c.secondaryLabel else valueColor, maxLines = 1) }
+        if (!stack && money != null) { Spacer(Modifier.width(10.dp)); Money(money, style = Apple.type.body, color = if (moneyColor == Color.Unspecified) c.secondaryLabel else moneyColor, fontWeight = if (easy) FontWeight.Bold else null) }
+        else if (!stack && value != null) { Spacer(Modifier.width(10.dp)); Text(value, style = Apple.type.body, color = if (valueColor == Color.Unspecified) c.secondaryLabel else valueColor) }
         trailing?.let { Spacer(Modifier.width(8.dp)); it() }
         if (chevron) { Spacer(Modifier.width(8.dp)); Chevron() }
     }
@@ -148,7 +165,7 @@ fun ARow(
 /** A centred action inside a group ("Mark paid", "Remove"): accent text, or [color] (the negative colour for a destructive one). */
 @Composable
 fun ButtonRow(text: String, color: Color = MaterialTheme.colorScheme.primary, onClick: () -> Unit) {
-    Box(Modifier.fillMaxWidth().heightIn(min = 50.dp).pressable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxWidth().heightIn(min = touchMin(50.dp)).pressable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp), contentAlignment = Alignment.Center) {
         Text(text, style = Apple.type.body, color = color, textAlign = TextAlign.Center)
     }
 }
@@ -166,7 +183,7 @@ fun BigFigure(label: String, amount: Double?, sub: String? = null, text: String?
         Column(Modifier.weight(1f)) {
             Text(label, style = Apple.type.subheadline.copy(fontWeight = FontWeight.Medium), color = Apple.colors.secondaryLabel)
             val st = Apple.type.figure
-            if (amount != null) Money(amount, style = st, color = color) else Text(text.orEmpty(), style = st, color = color, maxLines = 1)
+            if (amount != null) Money(amount, style = st, color = color) else Text(text.orEmpty(), style = st, color = color)
             if (!sub.isNullOrEmpty()) Text(sub, style = Apple.type.subheadline, color = Apple.colors.secondaryLabel)
         }
         right?.invoke()
@@ -195,7 +212,7 @@ fun ShareRing(fraction: Double?, color: Color, modifier: Modifier = Modifier, si
 @Composable
 fun Pill(text: String, color: Color, modifier: Modifier = Modifier) {
     Surface(modifier, shape = AppleShapes.capsule, color = color.copy(alpha = 0.15f)) {
-        Text(text, Modifier.padding(horizontal = 9.dp, vertical = 3.dp), style = Apple.type.caption1.copy(fontWeight = FontWeight.SemiBold), color = color, maxLines = 1)
+        Text(text, Modifier.padding(horizontal = 9.dp, vertical = 3.dp), style = Apple.type.caption1.copy(fontWeight = FontWeight.SemiBold), color = color)
     }
 }
 
@@ -206,7 +223,7 @@ fun largeTitleStyle(title: String): TextStyle =
         title.length > 28 -> Apple.type.title2
         title.length > 20 -> Apple.type.title1
         else -> Apple.type.largeTitle
-    }
+    }.capped()   // never more than 1.5x its size, however large the font: a longer title wraps to a second line instead
 
 // ---------- the navigation shell ----------
 
@@ -238,7 +255,7 @@ fun NavScreen(
 @Composable
 fun PushScreen(title: String, back: String, actions: @Composable RowScope.() -> Unit = {}, content: @Composable ColumnScope.() -> Unit) {
     NavScreen(title, back, actions) { pad ->
-        Column(Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = Space.gutter).padding(top = 4.dp, bottom = bottomClearance()), content = content)
+        Column(Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = gutter()).padding(top = 4.dp, bottom = bottomClearance()), content = content)
     }
 }
 
@@ -258,12 +275,12 @@ fun BarSurface(scrolledUnder: Boolean, modifier: Modifier = Modifier, content: @
 fun BackButton(label: String, onClick: () -> Unit = { AppNav.back() }) {
     val desc = t("dlg.back", "Back")
     Row(
-        Modifier.heightIn(min = 44.dp).semantics(mergeDescendants = true) { contentDescription = desc }.pressDim(onClick = onClick).padding(start = 6.dp, end = 8.dp),
+        Modifier.heightIn(min = touchMin(44.dp)).semantics(mergeDescendants = true) { contentDescription = desc }.pressDim(onClick = onClick).padding(start = 6.dp, end = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(Icons.AutoMirrored.Rounded.ArrowBackIos, null, tint = Apple.colors.accent, modifier = Modifier.size(21.dp))
         Spacer(Modifier.width(3.dp))
-        Text(label, style = Apple.type.body, color = Apple.colors.accent, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 150.dp))
+        Text(label, style = Apple.type.body, color = Apple.colors.accent, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -300,7 +317,13 @@ fun NavBar(
     val c = Apple.colors
     val density = LocalDensity.current
     val style = largeTitleStyle(title)
-    val largePx = with(density) { style.lineHeight.toPx() + 10.dp.toPx() }
+    // The large title may take two lines (a long name, Telugu, a large font): measure it, so the collapsing bar is exactly as tall as the title.
+    val measurer = rememberTextMeasurer()
+    val room = with(density) { (LocalConfiguration.current.screenWidthDp.dp - gutter() * 2 - 4.dp).roundToPx().coerceAtLeast(1) }
+    val titleHeight = remember(title, style, room, density) {
+        if (!largeTitle) 0 else measurer.measure(title, style, maxLines = 2, overflow = TextOverflow.Ellipsis, constraints = Constraints(maxWidth = room)).size.height
+    }
+    val largePx = titleHeight + with(density) { 10.dp.toPx() }
     val state = scroll?.state
     if (largeTitle && state != null) SideEffect { if (state.heightOffsetLimit != -largePx) state.heightOffsetLimit = -largePx }
     val collapsed = if (!largeTitle) 1f else state?.collapsedFraction ?: 0f
@@ -309,7 +332,7 @@ fun NavBar(
         NavBarRow(
             leading = { if (back != null) BackButton(back, onBack) },
             title = {
-                Text(title, style = Apple.type.headline, color = c.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                Text(title, style = Apple.type.headline, color = c.label, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
                     modifier = Modifier.graphicsLayer { alpha = if (largeTitle) ((collapsed - 0.7f) / 0.3f).coerceIn(0f, 1f) else 1f })
             },
             trailing = { Tinted { Row(Modifier.padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically, content = actions) } },
@@ -317,8 +340,8 @@ fun NavBar(
         if (largeTitle) {
             val h = with(density) { (largePx + (state?.heightOffset ?: 0f)).coerceAtLeast(0f).toDp() }
             Box(Modifier.fillMaxWidth().height(h).clipToBounds()) {
-                Text(title, style = style, color = c.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.align(Alignment.BottomStart).padding(start = Space.gutter + 4.dp, end = Space.gutter, bottom = 6.dp).semantics { heading() })
+                Text(title, style = style, color = c.label, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.align(Alignment.BottomStart).padding(start = gutter() + 4.dp, end = gutter(), bottom = 6.dp).semantics { heading() })
             }
         }
     }

@@ -23,6 +23,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRequester
 import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.Color
@@ -50,6 +51,10 @@ import com.tally.book.ui.theme.AppleShapes
 import com.tally.book.ui.theme.ElevatedLevel
 import com.tally.book.ui.theme.LocalSemantic
 import com.tally.book.ui.theme.Motion
+import com.tally.book.ui.theme.LocalEasy
+import com.tally.book.ui.theme.bigText
+import com.tally.book.ui.theme.touchMin
+import com.tally.book.ui.theme.stackGap
 import java.time.Instant
 import java.time.ZoneOffset
 
@@ -92,7 +97,16 @@ fun Money(
         signed && value > 0.5 -> "+" + inr(value)
         else -> inr(value)
     }
-    Text(text, modifier, style = style.copy(fontFeatureSettings = "tnum"), color = color, fontWeight = fontWeight, maxLines = 1)
+    val base = style.copy(fontFeatureSettings = "tnum")
+    // A figure is never cut off: when it is wider than the room it has (a large font), it steps down in size until it fits on one line.
+    var shrink by remember(text, base.fontSize) { mutableFloatStateOf(1f) }
+    val sized = if (shrink < 1f && base.fontSize.isSp) base.copy(
+        fontSize = base.fontSize * shrink, lineHeight = if (base.lineHeight.isSp) base.lineHeight * shrink else base.lineHeight,
+    ) else base
+    Text(
+        text, modifier, style = sized, color = color, fontWeight = fontWeight, maxLines = 1, softWrap = false,
+        onTextLayout = { r -> if (r.didOverflowWidth && shrink > 0.4f) shrink *= 0.92f },
+    )
 }
 
 /** Positive figures in the positive colour, negative in the negative one. */
@@ -187,7 +201,7 @@ fun ListRow(
     value: String? = null, chevron: Boolean = false, headlineColor: Color = Color.Unspecified,
 ) {
     val interactive = onClick != null || onLongClick != null
-    val m = modifier.fillMaxWidth().heightIn(min = 44.dp).clip(AppleShapes.field)
+    val m = modifier.fillMaxWidth().heightIn(min = touchMin(44.dp)).clip(AppleShapes.field)
         .then(if (interactive) Modifier.pressable(onLongClick = onLongClick) { onClick?.invoke() } else Modifier)
     CellRow(m, headline, supporting, leadingIcon, leadingColor, leading, amount, amountColor, value, trailing, chevron, headlineColor)
 }
@@ -198,18 +212,23 @@ private fun CellRow(
     amount: Double?, amountColor: Color, value: String?, trailing: (@Composable () -> Unit)?, chevron: Boolean, headlineColor: Color,
 ) {
     val c = Apple.colors
-    Row(modifier.padding(vertical = 10.dp, horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    val easy = LocalEasy.current
+    // with large text the amount (or value) goes under the title instead of squeezing it
+    val stack = bigText() && (amount != null || value != null)
+    Row(modifier.padding(vertical = if (easy) 14.dp else 10.dp, horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         when {
             leading != null -> { leading(); Spacer(Modifier.width(14.dp)) }
             leadingIcon != null -> { IconTile(leadingIcon, leadingColor ?: c.accent); Spacer(Modifier.width(14.dp)) }
             leadingColor != null -> { Box(Modifier.size(10.dp).clip(AppleShapes.capsule).background(leadingColor)); Spacer(Modifier.width(14.dp)) }
         }
         Column(Modifier.weight(1f)) {
-            Text(headline, style = Apple.type.body, color = if (headlineColor == Color.Unspecified) c.label else headlineColor, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (!supporting.isNullOrEmpty()) Text(supporting, style = Apple.type.footnote, color = c.secondaryLabel, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(headline, style = Apple.type.body, color = if (headlineColor == Color.Unspecified) c.label else headlineColor)
+            if (!supporting.isNullOrEmpty()) Text(supporting, style = Apple.type.footnote, color = c.secondaryLabel)
+            if (stack && amount != null) Money(amount, style = Apple.type.body, color = if (amountColor == Color.Unspecified) c.label else amountColor, fontWeight = if (easy) FontWeight.Bold else FontWeight.Medium)
+            if (stack && value != null) Text(value, style = Apple.type.body, color = c.secondaryLabel)
         }
-        if (amount != null) { Spacer(Modifier.width(12.dp)); Money(amount, style = Apple.type.body, color = if (amountColor == Color.Unspecified) c.label else amountColor, fontWeight = FontWeight.Medium) }
-        if (value != null) { Spacer(Modifier.width(10.dp)); Text(value, style = Apple.type.body, color = c.secondaryLabel, maxLines = 1) }
+        if (!stack && amount != null) { Spacer(Modifier.width(12.dp)); Money(amount, style = Apple.type.body, color = if (amountColor == Color.Unspecified) c.label else amountColor, fontWeight = if (easy) FontWeight.Bold else FontWeight.Medium) }
+        if (!stack && value != null) { Spacer(Modifier.width(10.dp)); Text(value, style = Apple.type.body, color = c.secondaryLabel) }
         trailing?.let { Spacer(Modifier.width(8.dp)); it() }
         if (chevron) { Spacer(Modifier.width(8.dp)); Chevron() }
     }
@@ -233,7 +252,7 @@ fun StatTile(label: String, value: Double, modifier: Modifier = Modifier, color:
             .then(if (onClick != null) Modifier.pressable(onClick = onClick) else Modifier)
             .padding(horizontal = 14.dp, vertical = 12.dp),
     ) {
-        Text(label, style = Apple.type.footnote.copy(fontWeight = FontWeight.Medium), color = c.secondaryLabel, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(label, style = Apple.type.footnote.copy(fontWeight = FontWeight.Medium), color = c.secondaryLabel)
         Spacer(Modifier.height(4.dp))
         Money(value, style = Apple.type.title2, color = color)
     }
@@ -273,11 +292,16 @@ fun editText(v: Double): String = if (v == 0.0) "" else jsNumber(v)
 @Composable
 fun FieldFrame(label: String?, supporting: String? = null, modifier: Modifier = Modifier, cell: Modifier = Modifier, content: @Composable RowScope.() -> Unit) {
     val c = Apple.colors
+    val easy = LocalEasy.current
     val fill = if (LocalOnCell.current) c.fill else c.cell
+    // Easy mode: the field being typed in has an obvious accent outline
+    var focused by remember { mutableStateOf(false) }
     Column(modifier.fillMaxWidth()) {
-        if (!label.isNullOrEmpty()) Text(label, style = Apple.type.footnote, color = c.secondaryLabel, modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 6.dp))
+        if (!label.isNullOrEmpty()) Text(label, style = if (easy) Apple.type.footnote.copy(fontWeight = FontWeight.Medium) else Apple.type.footnote, color = c.secondaryLabel, modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 6.dp))
         Row(
-            Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(AppleShapes.field).background(fill).then(cell).padding(horizontal = 14.dp, vertical = 12.dp),
+            Modifier.fillMaxWidth().heightIn(min = touchMin(48.dp)).clip(AppleShapes.field).background(fill).then(cell)
+                .then(if (easy) Modifier.focusGroup().onFocusChanged { focused = it.hasFocus }.border(if (focused) 2.dp else 1.dp, if (focused) c.accent else c.separator, AppleShapes.field) else Modifier)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically, content = content,
         )
         if (!supporting.isNullOrEmpty()) Text(supporting, style = Apple.type.footnote, color = c.secondaryLabel, modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 6.dp))
@@ -348,12 +372,17 @@ fun DateField(iso: String, onIso: (String) -> Unit, label: String, modifier: Mod
     val c = Apple.colors
     FieldFrame(label, null, modifier, cell = Modifier.pressable(scaleTo = 1f) { open = true }) {
         val shown = fmtISODate(iso)
-        Text(shown.ifEmpty { "—" }, style = Apple.type.body, color = if (shown.isEmpty()) c.tertiaryLabel else c.label, modifier = Modifier.weight(1f), maxLines = 1)
+        Text(shown.ifEmpty { "—" }, style = Apple.type.body, color = if (shown.isEmpty()) c.tertiaryLabel else c.label, modifier = Modifier.weight(1f))
         Icon(Icons.Rounded.CalendarMonth, null, tint = c.accent, modifier = Modifier.size(20.dp))
     }
     if (open) {
         val init = parseISO(iso)?.atStartOfDay(ZoneOffset.UTC)?.toInstant()?.toEpochMilli()
         val state = rememberDatePickerState(initialSelectedDateMillis = init ?: Clock.today().atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli())
+        // Material's calendar is a fixed grid that does not scroll: at a very large font size its buttons would leave the screen,
+        // so the calendar alone is held to 1.3x text (its day numbers and buttons stay a comfortable size).
+        val outer = androidx.compose.ui.platform.LocalDensity.current
+        val calendarDensity = if (outer.fontScale > 1.3f) androidx.compose.ui.unit.Density(outer.density, 1.3f) else outer
+        CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides calendarDensity) {
         DatePickerDialog(
             onDismissRequest = { open = false },
             shape = AppleShapes.alert,
@@ -371,6 +400,7 @@ fun DateField(iso: String, onIso: (String) -> Unit, label: String, modifier: Mod
                 }
             },
         ) { DatePicker(state, colors = DatePickerDefaults.colors(containerColor = c.elevatedCell)) }
+        }
     }
 }
 
@@ -380,9 +410,7 @@ fun DateField(iso: String, onIso: (String) -> Unit, label: String, modifier: Mod
  */
 @Composable
 fun ChoiceChips(options: List<Pair<String, String>>, selected: String?, onSelect: (String) -> Unit, modifier: Modifier = Modifier, colors: Map<String, Color> = emptyMap()) {
-    val segmented = options.size in 2..4 && options.all { it.second.length <= 14 } && options.sumOf { it.second.length } <= 36
-    if (segmented) SegmentedControl(options, selected, onSelect, modifier, colors = colors)
-    else CapsuleChoice(options, selected, onSelect, modifier, colors)
+    SegmentedControl(options, selected, onSelect, modifier, colors = colors)
 }
 
 /** A switch row (Settings): the whole row toggles, the iOS switch on the right, a haptic on every flip. */
@@ -390,7 +418,7 @@ fun ChoiceChips(options: List<Pair<String, String>>, selected: String?, onSelect
 fun SwitchRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit, modifier: Modifier = Modifier, subtitle: String? = null, icon: ImageVector? = null) {
     val haptics = rememberHaptics()
     val src = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-    val m = modifier.fillMaxWidth().heightIn(min = 44.dp)
+    val m = modifier.fillMaxWidth().heightIn(min = touchMin(44.dp))
         .toggleable(checked, src, indication = null, role = Role.Switch) { haptics.toggle(it); onChange(it) }
     CellRow(m, title, subtitle, icon, null, null, null, Color.Unspecified, null, { AppleSwitch(checked, null) }, false, Color.Unspecified)
 }
@@ -407,11 +435,14 @@ fun EditSheet(
     title: String, onDismiss: () -> Unit, onSave: (() -> Unit)?, saveLabel: String = t("dlg.save", "Save"),
     saveEnabled: Boolean = true, onDelete: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit,
 ) {
+    // Easy mode: a sheet never closes from a drag or a tap outside, only from the X, Cancel or Back (no accidents).
     // A form closes from a drag only when it is pulled well down: Material's sheet hid after a short pull (56 dp) or any quick
     // flick, which threw a half-typed entry away, often while scrolling the form back to the top. When a drag ends, the sheet
     // is allowed to hide only if it has travelled at least a third of its height (and 160 dp); otherwise it springs back.
     // A tap outside does nothing on a form. X, Cancel and Back always close. A sheet with nothing to save keeps Material's feel.
     val form = onSave != null
+    val easy = LocalEasy.current
+    val locked = form || easy
     val closing = remember { mutableStateOf(false) }
     val density = androidx.compose.ui.platform.LocalDensity.current
     val minPull = with(density) { 160.dp.toPx() }
@@ -419,7 +450,9 @@ fun EditSheet(
     val restAt = remember { mutableFloatStateOf(Float.NaN) }   // the sheet's offset when it sits fully open
     val holder = remember { arrayOfNulls<SheetState>(1) }
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { target ->
-        if (target != SheetValue.Hidden || !form || closing.value) true
+        if (target != SheetValue.Hidden || closing.value) true
+        else if (easy) false
+        else if (!form) true
         else {
             val st = holder[0]; val rest = restAt.floatValue
             val now = st?.let { runCatching { it.requireOffset() }.getOrNull() }
@@ -439,17 +472,17 @@ fun EditSheet(
     ModalBottomSheet(
         // a tall sheet stops below the status bar: under it, the system takes the taps meant for Cancel and Save
         modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars.only(WindowInsetsSides.Top)),
-        onDismissRequest = { if (!form || closing.value || state.currentValue == SheetValue.Hidden) onDismiss() }, sheetState = state, containerColor = Apple.colors.elevated, shape = AppleShapes.sheet,
+        onDismissRequest = { if (!locked || closing.value || state.currentValue == SheetValue.Hidden) onDismiss() }, sheetState = state, containerColor = Apple.colors.elevated, shape = AppleShapes.sheet,
         tonalElevation = 0.dp, scrimColor = Color.Black.copy(alpha = 0.35f),
-        dragHandle = { Grabber() },
+        dragHandle = if (easy) null else ({ Grabber() }),
     ) {
-        if (form) androidx.activity.compose.BackHandler { close() }
+        if (locked) androidx.activity.compose.BackHandler { close() }
         ElevatedLevel {
             Column(Modifier.fillMaxWidth().imePadding()) {
                 SheetHeader(title, close)
                 Column(
-                    Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 24.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(horizontal = if (easy) 20.dp else 16.dp).padding(top = 8.dp, bottom = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(stackGap()),
                 ) {
                     content()
                     if (onDelete != null) {
@@ -509,14 +542,17 @@ fun DialogHost() {
     val head = parts[0].trim()
     val body = parts.getOrNull(1)?.trim().orEmpty()
     val titled = body.isNotEmpty() || head.length <= 110
+    val big = bigText()
+    val maxHeight = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp * 0.88f
     Dialog(onDismissRequest = { a.done(false) }, properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)) {
         ElevatedLevel {
             Column(
-                Modifier.widthIn(max = 300.dp).fillMaxWidth(0.78f)
+                Modifier.widthIn(max = if (big) 420.dp else 300.dp).fillMaxWidth(if (big) 0.92f else 0.78f).heightIn(max = maxHeight)
                     .graphicsLayer { val k = appear.value; alpha = k; if (!calm) { scaleX = 1.12f - 0.12f * k; scaleY = scaleX } }
                     .clip(AppleShapes.alert).background(c.cell),
             ) {
-                Column(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 20.dp, bottom = 18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                // a long message at a large font size scrolls inside the alert; the buttons under it stay in view
+                Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 20.dp, bottom = 18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     if (titled) Text(head, style = Apple.type.headline, color = c.label, textAlign = TextAlign.Center)
                     else Text(head, style = Apple.type.subheadline, color = c.label, textAlign = TextAlign.Center)
                     if (body.isNotEmpty()) { Spacer(Modifier.height(4.dp)); Text(body, style = Apple.type.subheadline, color = c.label, textAlign = TextAlign.Center) }
@@ -529,7 +565,7 @@ fun DialogHost() {
                 val cancel = a.cancel
                 when {
                     cancel == null -> ok(Modifier.fillMaxWidth())
-                    a.ok.length + cancel.length > 22 -> Column {
+                    big || a.ok.length + cancel.length > 22 -> Column {
                         ok(Modifier.fillMaxWidth()); Hairline()
                         AlertButton(cancel, c.accent, bold = a.danger, modifier = Modifier.fillMaxWidth()) { a.done(false) }
                     }
@@ -546,7 +582,7 @@ fun DialogHost() {
 
 @Composable
 private fun AlertButton(text: String, color: Color, bold: Boolean, modifier: Modifier, onClick: () -> Unit) {
-    Box(modifier.heightIn(min = 46.dp).pressable(scaleTo = 1f, onClick = onClick).padding(horizontal = 12.dp, vertical = 11.dp), contentAlignment = Alignment.Center) {
+    Box(modifier.heightIn(min = touchMin(46.dp)).pressable(scaleTo = 1f, onClick = onClick).padding(horizontal = 12.dp, vertical = 11.dp), contentAlignment = Alignment.Center) {
         Text(text, style = Apple.type.body.copy(fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal), color = color, textAlign = TextAlign.Center)
     }
 }
@@ -566,10 +602,10 @@ private fun Toast(data: SnackbarData) {
             Modifier.shadow(18.dp, AppleShapes.capsule, ambientColor = Color.Black.copy(alpha = 0.18f), spotColor = Color.Black.copy(alpha = 0.22f))
                 .clip(AppleShapes.capsule).background(c.elevatedCell)
                 .pressable(scaleTo = 0.98f, highlight = false) { data.dismiss() }
-                .heightIn(min = 48.dp).padding(start = 20.dp, end = if (data.visuals.actionLabel != null) 10.dp else 20.dp, top = 8.dp, bottom = 8.dp),
+                .heightIn(min = touchMin(48.dp)).padding(start = 20.dp, end = if (data.visuals.actionLabel != null) 10.dp else 20.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(data.visuals.message, style = Apple.type.subheadline.copy(fontWeight = FontWeight.Medium), color = c.label, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Text(data.visuals.message, style = Apple.type.subheadline.copy(fontWeight = FontWeight.Medium), color = c.label, maxLines = 8, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             data.visuals.actionLabel?.let { label ->
                 Spacer(Modifier.width(8.dp))
                 PlainButton(label, { haptics.confirm(); data.performAction() }, bold = true)

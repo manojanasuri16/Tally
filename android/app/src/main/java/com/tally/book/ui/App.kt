@@ -32,6 +32,7 @@ import com.tally.book.ui.loans.loansGraph
 import com.tally.book.ui.lock.LockScreen
 import com.tally.book.ui.theme.Motion
 import com.tally.book.ui.theme.Space
+import com.tally.book.ui.theme.gutter
 
 /*
  * The app shell: the lock gate, one NavHost with a single root screen (Routes.LOANS) and pushed sub-screens (no tab bar,
@@ -159,4 +160,4 @@ fun SubScreen(title: String, actions: @Composable RowScope.() -> Unit = {}, back
 
 /** Standard padding and spacing for a scrolling screen body. */
 val ScreenPadding: PaddingValues
-    @Composable get() = PaddingValues(start = Space.gutter, end = Space.gutter, top = 4.dp, bottom = bottomClearance())
+    @Composable get() = PaddingValues(start = gutter(), end = gutter(), top = 4.dp, bottom = bottomClearance())

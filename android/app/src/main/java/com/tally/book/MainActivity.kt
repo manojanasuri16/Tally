@@ -28,6 +28,8 @@ import com.tally.book.ui.TallyRoot
 import com.tally.book.ui.family.FastPoll
 import com.tally.book.ui.components.Dialogs
 import com.tally.book.ui.theme.Appearance
+import com.tally.book.ui.theme.EasyMode
+import com.tally.book.ui.theme.EasyRules
 import com.tally.book.ui.theme.TallyTheme
 import com.tally.book.ui.theme.ThemeMode
 import kotlinx.coroutines.launch
@@ -79,7 +81,8 @@ class MainActivity : FragmentActivity() {
         setContent {
             val rev by Ledger.rev.collectAsStateWithLifecycle()
             val phase by Ledger.phase.collectAsStateWithLifecycle()
-            val appearance = remember(rev, phase) { appearance(phase == Ledger.Phase.READY) }
+            val easy = EasyMode.on   // a device setting held as Compose state: flipping it redraws everything, the lock screen included
+            val appearance = remember(rev, phase, easy) { appearance(phase == Ledger.Phase.READY).copy(easy = easy, fontScale = if (easy) EasyRules.EXTRA_SCALE else 1f) }
             // the window behind the app and the system bars' icons follow the setting at once, not only the phone's mode
             val sysDark = isSystemInDarkTheme()
             LaunchedEffect(appearance.mode, sysDark) { applyChrome(appearance.mode) }

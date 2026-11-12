@@ -53,6 +53,9 @@ import com.tally.book.core.*
 import com.tally.book.ui.theme.Apple
 import com.tally.book.ui.theme.AppleShapes
 import com.tally.book.ui.theme.Motion
+import com.tally.book.ui.theme.LocalEasy
+import com.tally.book.ui.theme.bigText
+import com.tally.book.ui.theme.touchMin
 import kotlin.math.roundToInt
 
 /* The kit's controls: press feedback, haptics, the iOS switch, the segmented control, capsule buttons, icon tiles, bar buttons. */
@@ -76,7 +79,9 @@ fun Modifier.pressable(
     val pressed by src.collectIsPressedAsState()
     val calm = reduceMotion()
     val haptics = rememberHaptics()
-    val scale by animateFloatAsState(if (pressed && !calm && enabled) scaleTo else 1f, Motion.press(), label = "press")
+    // Easy mode presses a little deeper, so the response to a touch is obvious
+    val target = if (LocalEasy.current && scaleTo < 1f) scaleTo - 0.02f else scaleTo
+    val scale by animateFloatAsState(if (pressed && !calm && enabled) target else 1f, Motion.press(), label = "press")
     val hl = Apple.colors.highlight
     val hlAlpha by animateFloatAsState(if (pressed && highlight && enabled) 1f else 0f, if (pressed) androidx.compose.animation.core.snap() else Motion.standard(), label = "hl")
     return this
@@ -149,9 +154,10 @@ fun AppleSwitch(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, modifie
     val stretch by animateFloatAsState(if (pressed && enabled) 1f else 0f, Motion.press(), label = "stretch")
     val track by animateColorAsState(if (checked) c.switchOn else c.switchOff, if (calm) Motion.fade() else Motion.control(), label = "track")
     val interactive = onCheckedChange != null
+    val k = if (LocalEasy.current) 1.25f else 1f
     Canvas(
         modifier
-            .size(51.dp, 31.dp)
+            .size(51.dp * k, 31.dp * k)
             .alpha(if (enabled) 1f else 0.4f)
             .then(
                 if (interactive) Modifier.toggleable(checked, src, indication = null, enabled = enabled, role = Role.Switch) {
@@ -183,6 +189,10 @@ fun SegmentedControl(
     modifier: Modifier = Modifier, enabled: Boolean = true, colors: Map<String, Color> = emptyMap(),
 ) {
     if (options.isEmpty()) return
+    // Two to four short options fit a segmented control. Longer words (Telugu, Hindi) or large text (the phone's own large font, Easy mode)
+    // would cramp it, so the same choice is drawn as capsules that wrap, which grow with the text.
+    val fits = options.size in 2..4 && options.all { it.second.length <= 14 } && options.sumOf { it.second.length } <= 36 && !bigText()
+    if (!fits) { CapsuleChoice(options, selected, onSelect, modifier, colors); return }
     val c = Apple.colors
     val haptics = rememberHaptics()
     val calm = reduceMotion()
@@ -216,7 +226,7 @@ fun SegmentedControl(
                     colors[v]?.let { Box(Modifier.size(8.dp).clip(AppleShapes.capsule).background(it)); Spacer(Modifier.width(6.dp)) }
                     Text(
                         label, style = Apple.type.footnote.copy(fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Medium),
-                        color = c.label, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        color = c.label, textAlign = TextAlign.Center,
                     )
                 }
             }
@@ -233,7 +243,8 @@ fun CapsuleChoice(
 ) {
     val c = Apple.colors
     val haptics = rememberHaptics()
-    FlowRow(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    val easy = LocalEasy.current
+    FlowRow(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(if (easy) 10.dp else 8.dp)) {
         options.forEach { (v, label) ->
             val sel = v == selected
             val bg by animateColorAsState(if (sel) c.accent else c.fill, Motion.control(), label = "cap")
@@ -241,11 +252,12 @@ fun CapsuleChoice(
                 Modifier.clip(AppleShapes.capsule).background(bg)
                     .semantics { this.selected = sel }
                     .pressable(scaleTo = 0.95f, highlight = false) { if (!sel) haptics.tick(); onSelect(v) }
-                    .heightIn(min = 34.dp).padding(horizontal = 14.dp, vertical = 7.dp),
+                    .heightIn(min = touchMin(34.dp)).padding(horizontal = 14.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(label, style = Apple.type.footnote.copy(fontSize = androidx.compose.ui.unit.TextUnit(13.5f, androidx.compose.ui.unit.TextUnitType.Sp), fontWeight = FontWeight.Medium),
-                    color = if (sel) MaterialTheme.colorScheme.onPrimary else c.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                // the label wraps rather than being cut off
+                Text(label, style = Apple.type.footnote.copy(fontSize = androidx.compose.ui.unit.TextUnit(13.5f, androidx.compose.ui.unit.TextUnitType.Sp), fontWeight = if (easy) FontWeight.SemiBold else FontWeight.Medium),
+                    color = if (sel) MaterialTheme.colorScheme.onPrimary else c.label)
             }
         }
     }
@@ -260,7 +272,7 @@ fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifi
     // the dim state is drawn in the colours, so the modifier chain stays the same when a button turns on
     val dim = if (enabled) 1f else 0.4f
     Box(
-        modifier.heightIn(min = 50.dp).clip(AppleShapes.capsule).background(bg.copy(alpha = bg.alpha * dim))
+        modifier.heightIn(min = touchMin(50.dp) + (if (LocalEasy.current) 4.dp else 0.dp)).clip(AppleShapes.capsule).background(bg.copy(alpha = bg.alpha * dim))
             .pressable(enabled = enabled, highlight = false, onClick = onClick).padding(horizontal = 20.dp, vertical = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -273,7 +285,7 @@ fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifi
 fun SecondaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, color: Color = Color.Unspecified) {
     val fg = if (color == Color.Unspecified) Apple.colors.accent else color
     Box(
-        modifier.heightIn(min = 44.dp).clip(AppleShapes.capsule).background(fg.copy(alpha = if (enabled) 0.15f else 0.06f))
+        modifier.heightIn(min = touchMin(44.dp)).clip(AppleShapes.capsule).background(fg.copy(alpha = if (enabled) (if (LocalEasy.current) 0.2f else 0.15f) else 0.06f))
             .pressable(enabled = enabled, highlight = false, onClick = onClick).padding(horizontal = 18.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -285,7 +297,7 @@ fun SecondaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modi
 @Composable
 fun PlainButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, color: Color = Color.Unspecified, bold: Boolean = false, icon: ImageVector? = null, maxLines: Int = 3) {
     val fg = if (color == Color.Unspecified) Apple.colors.accent else color
-    Row(modifier.heightIn(min = 44.dp).pressDim(enabled, onClick = onClick).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(modifier.heightIn(min = touchMin(44.dp)).pressDim(enabled, onClick = onClick).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         if (icon != null) { Icon(icon, null, tint = fg, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(6.dp)) }
         Text(text, style = Apple.type.body.copy(fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal), color = fg, maxLines = maxLines, overflow = TextOverflow.Ellipsis)
     }
@@ -297,8 +309,8 @@ fun SheetHeader(title: String, onClose: () -> Unit, modifier: Modifier = Modifie
     val c = Apple.colors
     val desc = t("dlg.close", "Close")
     Row(modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(title, Modifier.weight(1f), style = Apple.type.headline, color = c.label, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Box(Modifier.size(44.dp).semantics { contentDescription = desc }.pressDim(onClick = onClose), contentAlignment = Alignment.Center) {
+        Text(title, Modifier.weight(1f), style = Apple.type.headline, color = c.label, maxLines = 4, overflow = TextOverflow.Ellipsis)
+        Box(Modifier.size(touchMin(44.dp)).semantics { contentDescription = desc }.pressDim(onClick = onClose), contentAlignment = Alignment.Center) {
             Box(Modifier.size(32.dp).clip(AppleShapes.capsule).background(c.fill), contentAlignment = Alignment.Center) {
                 Icon(androidx.compose.material.icons.Icons.Rounded.Close, null, tint = c.secondaryLabel, modifier = Modifier.size(18.dp))
             }
@@ -309,7 +321,13 @@ fun SheetHeader(title: String, onClose: () -> Unit, modifier: Modifier = Modifie
 /** The bar pinned under a sheet's form: Cancel, and the wider Save beside it. */
 @Composable
 fun SheetActions(saveLabel: String, saveEnabled: Boolean, onCancel: () -> Unit, onSave: () -> Unit, modifier: Modifier = Modifier) {
-    Row(modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+    if (bigText()) {
+        // large text: Save over Cancel, each the full width, so neither word is squeezed
+        Column(modifier.fillMaxWidth().padding(horizontal = if (LocalEasy.current) 20.dp else 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            PrimaryButton(saveLabel, onSave, Modifier.fillMaxWidth(), enabled = saveEnabled)
+            SecondaryButton(t("dlg.cancel", "Cancel"), onCancel, Modifier.fillMaxWidth().heightIn(min = 50.dp))
+        }
+    } else Row(modifier.fillMaxWidth().padding(horizontal = if (LocalEasy.current) 20.dp else 16.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         SecondaryButton(t("dlg.cancel", "Cancel"), onCancel, Modifier.weight(1f).heightIn(min = 50.dp))
         PrimaryButton(saveLabel, onSave, Modifier.weight(1.5f), enabled = saveEnabled)
     }
@@ -318,8 +336,8 @@ fun SheetActions(saveLabel: String, saveEnabled: Boolean, onCancel: () -> Unit, 
 /** A plain tinted icon in a navigation bar or toolbar, 44dp touch target, dims while held. */
 @Composable
 fun BarIcon(icon: ImageVector, description: String?, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, tint: Color = Color.Unspecified) {
-    Box(modifier.size(44.dp).pressDim(enabled, onClick = onClick), contentAlignment = Alignment.Center) {
-        Icon(icon, description, tint = if (tint == Color.Unspecified) Apple.colors.accent else tint, modifier = Modifier.size(24.dp))
+    Box(modifier.size(touchMin(44.dp)).pressDim(enabled, onClick = onClick), contentAlignment = Alignment.Center) {
+        Icon(icon, description, tint = if (tint == Color.Unspecified) Apple.colors.accent else tint, modifier = Modifier.size(if (LocalEasy.current) 30.dp else 24.dp))
     }
 }
 
@@ -327,8 +345,8 @@ fun BarIcon(icon: ImageVector, description: String?, onClick: () -> Unit, modifi
 @Composable
 fun BarButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, bold: Boolean = false, color: Color = Color.Unspecified) {
     val fg = if (color == Color.Unspecified) Apple.colors.accent else color
-    Box(modifier.heightIn(min = 44.dp).pressDim(enabled, onClick = onClick).padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
-        Text(text, style = Apple.type.body.copy(fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal), color = fg, maxLines = 1)
+    Box(modifier.heightIn(min = touchMin(44.dp)).pressDim(enabled, onClick = onClick).padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
+        Text(text, style = Apple.type.body.copy(fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal), color = fg, maxLines = 2)
     }
 }
 

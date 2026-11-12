@@ -9,6 +9,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
@@ -187,8 +189,14 @@ private fun scheme(a: AppleColors): ColorScheme {
     )
 }
 
-/** The appearance settings the theme needs (read from DB / device prefs by the caller). */
-data class Appearance(val mode: String = "system", val color: String = "blue", val customAccent: String = "#0071E3", val fontScale: Float = 1f)
+/**
+ * The appearance settings the theme needs (read from DB / device prefs by the caller). [fontScale] is the extra enlargement on top of
+ * the phone's own font size (1 normally, [EasyRules.EXTRA_SCALE] in Easy mode); the theme caps the total at [EasyRules.MAX_SCALE].
+ */
+data class Appearance(
+    val mode: String = "system", val color: String = "blue", val customAccent: String = "#0071E3",
+    val fontScale: Float = 1f, val easy: Boolean = false,
+)
 
 @Composable
 fun isDarkFor(mode: String): Boolean = ThemeMode.isDark(mode, isSystemInDarkTheme())
@@ -208,7 +216,8 @@ fun TallyTheme(appearance: Appearance, content: @Composable () -> Unit) {
         }
         else -> COLOR_THEMES[if (colorId == "dynamic") "blue" else colorId]!!.let { if (dark) it.dark else it.light }
     }
-    val apple = remember(dark, black, accent) { appleColors(dark, black, accent) }
+    val easy = appearance.easy
+    val apple = remember(dark, black, accent, easy) { appleColors(dark, black, accent).let { if (easy) EasyRules.contrast(it) else it } }
     val scheme = remember(apple) { scheme(apple) }
     val semantic = Semantic(
         // iOS system green / red / orange; light mode uses their high-contrast variants so figures stay legible on white
@@ -219,7 +228,11 @@ fun TallyTheme(appearance: Appearance, content: @Composable () -> Unit) {
         clean = if (dark) Color(0xFF30D158) else Color(0xFF34C759),
         categories = if (dark) CATS_DARK else CATS_LIGHT,
     )
-    CompositionLocalProvider(LocalSemantic provides semantic, LocalAppleColors provides apple) {
+    // the phone's own font size, times Easy mode's extra, capped (EasyRules.scale); every sp in the app follows
+    val system = LocalDensity.current
+    val total = EasyRules.scale(system.fontScale, appearance.fontScale)
+    val density = remember(system.density, system.fontScale, total) { if (total == system.fontScale) system else Density(system.density, total) }
+    CompositionLocalProvider(LocalDensity provides density, LocalEasy provides easy, LocalSemantic provides semantic, LocalAppleColors provides apple) {
         AppleMaterial(scheme, content)
     }
 }
