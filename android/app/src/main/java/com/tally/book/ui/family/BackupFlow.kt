@@ -27,6 +27,9 @@ import com.tally.book.ui.AppNav
 import com.tally.book.ui.components.*
 import com.tally.book.ui.lock.Bio
 import com.tally.book.ui.lock.LockFlow
+import com.tally.book.ui.lock.LockModes
+import com.tally.book.ui.lock.PhoneLock
+import com.tally.book.ui.lock.typeNoun
 import com.tally.book.ui.theme.Apple
 import com.tally.book.ui.theme.LocalSemantic
 import kotlinx.coroutines.Dispatchers
@@ -102,16 +105,24 @@ object BackupFlow {
 
         // a locked backup: its PIN is checked against the backup before anything else happens
         var opened: Crypto.Opened? = null
+        var typedCode: String? = null
         val data: Obj
         if (checked.sealed) {
             val env = checked.envelope!!
             var got: Obj? = null
-            val ok = LockFlow.askSealed(env) { secret ->
-                val o = withContext(Dispatchers.Default) { Crypto.openEnvelope(env, secret) }
-                val parsed = o?.let { runCatching { JsonCodec.parseObj(it.text) }.getOrNull() }
-                if (o != null && BackupCore.isBook(parsed)) { opened = o; got = parsed; true } else false
+            // made with the phone's lock on this phone (an undo, or a backup from this same lock): the phone's prompt opens it
+            LockModes.openWithPhone(env)?.let { o ->
+                val parsed = runCatching { JsonCodec.parseObj(o.text) }.getOrNull()
+                if (BackupCore.isBook(parsed)) { opened = o; got = parsed }
             }
-            if (!ok) return
+            if (got == null) {
+                val ok = LockFlow.askSealed(env) { secret ->
+                    val o = withContext(Dispatchers.Default) { Crypto.openEnvelope(env, secret) }
+                    val parsed = o?.let { runCatching { JsonCodec.parseObj(it.text) }.getOrNull() }
+                    if (o != null && BackupCore.isBook(parsed)) { opened = o; got = parsed; typedCode = secret; true } else false
+                }
+                if (!ok) return
+            }
             data = got!!
         } else data = checked.plain!!
 
@@ -121,6 +132,7 @@ object BackupFlow {
         if (!Dialogs.ask(question, if (undo) t("backup.undo.ok", "Undo") else t("backup.restore.ok", "Restore"), danger = true)) return
 
         val keyBefore = Crypto.key?.copyOf()
+        val codeBefore = DB.s("recoveryCode")
         FamilyFlow.busy.value = t("backup.restoring", "Restoring…")
         val failure: String? = try {
             Sync.detached {
@@ -136,6 +148,12 @@ object BackupFlow {
                         }
                         val next = data.copyObj()
                         if (Crypto.locked) next["lockType"] = Crypto.type
+                        when {
+                            // the phone's lock keeps its recovery code inside the book, whatever the backup held
+                            Crypto.locked && Crypto.type == LockRules.PHONE && keepLock -> next["recoveryCode"] = codeBefore
+                            Crypto.locked && Crypto.type == LockRules.PHONE -> if (!RecoveryCode.valid(next.s("recoveryCode")) && typedCode != null) next["recoveryCode"] = typedCode
+                            else -> next.remove("recoveryCode")
+                        }
                         Ledger.start(next)
                         Ledger.edit { SyncModel.markRestored(DB) }
                     }
@@ -148,12 +166,18 @@ object BackupFlow {
 
         val lockChanged = !(keyBefore?.contentEquals(Crypto.key) ?: (Crypto.key == null))
         if (lockChanged) Bio.disable()       // the fingerprint copy holds the old lock
+        if (!PhoneLock.fits(Crypto.salt)) PhoneLock.disable()   // and the phone's copy, unless it is this very lock
         Ledger.persist()
         if (undo) Backups.dropSafety()
         Sync.engine.resetState()
         AppNav.home()
         when {
-            lockChanged && Crypto.locked -> Dialogs.tell(t("backup.done.locked", "Restored.\n\nTally is now locked with the PIN from this backup."))
+            lockChanged && Crypto.locked && Crypto.type == "pin" -> Dialogs.tell(t("backup.done.locked", "Restored.\n\nTally is now locked with the PIN from this backup."))
+            lockChanged && Crypto.locked -> {
+                Dialogs.tell(t("backup.done.lockedWhat", "Restored.\n\nTally is now locked with the {what} from this backup.", "what" to typeNoun(Crypto.type)))
+                // the phone's lock from a backup: this phone's prompt is set up again (asked), or the recovery code is used
+                if (Crypto.type == LockRules.PHONE) LockModes.afterRecoveryUnlock()
+            }
             lockChanged -> Dialogs.tell(t("backup.done.unlocked", "Restored.\n\nThe app lock is off, as it was then."))
             else -> Dialogs.snack(if (undo) t("backup.undo.done", "Put back as it was") else t("backup.done", "Restored"))
         }
@@ -221,6 +245,7 @@ fun BackupGroup() {
     val rev = rememberLedger()
     val st = Backups.status.value
     val locked = remember(rev) { Crypto.locked }
+    val type = remember(rev) { Crypto.type }
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val chooseFolder = rememberFolderPicker()
@@ -228,7 +253,12 @@ fun BackupGroup() {
     val warn = LocalSemantic.current.warning
     AGroup(
         title = t("backup.title", "Backup"),
-        footer = if (locked) t("backup.help.locked", "Backups are locked with your PIN. To restore one you need that PIN.") else BackupText.noLockWarning(),
+        footer = when {
+            !locked -> BackupText.noLockWarning()
+            type == LockRules.PHONE -> t("backup.help.phone", "Backups are locked with your recovery code. To restore one on another phone you need that code.")
+            type == "pin" -> t("backup.help.locked", "Backups are locked with your PIN. To restore one you need that PIN.")
+            else -> t("backup.help.lockedWhat", "Backups are locked with your {what}. To restore one you need it.", "what" to typeNoun(type))
+        },
     ) {
         item {
             SwitchRow(

@@ -37,8 +37,12 @@ import com.tally.book.ui.ScreenPadding
 import com.tally.book.ui.SubScreen
 import com.tally.book.ui.components.*
 import com.tally.book.ui.loans.ROUTE_FAMILY
+import com.tally.book.data.LockKind
 import com.tally.book.ui.lock.Bio
 import com.tally.book.ui.lock.LockFlow
+import com.tally.book.ui.lock.LockModes
+import com.tally.book.ui.lock.PhoneLock
+import com.tally.book.ui.lock.typeNoun
 import com.tally.book.ui.theme.Apple
 import com.tally.book.ui.theme.LocalSemantic
 import com.tally.book.ui.theme.ThemeMode
@@ -264,45 +268,105 @@ private fun AppearanceGroup() {
 private fun LockGroup() {
     val rev = rememberLedger()
     val scope = rememberCoroutineScope()
-    val on = remember(rev) { Crypto.locked }
+    val kind = remember(rev) { LockModes.kind() }
+    val type = remember(rev) { Crypto.type }
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val bioAvail = remember { Bio.available(ctx) }
     val bioOn = remember(rev) { Bio.on() }
+    var choosing by remember { mutableStateOf(false) }
     AGroup(
         title = t("applock.title", "App lock"),
-        footer = if (on) t("applock.help.on", "Tally asks for your PIN when you open it.")
-        else t("applock.help.off", "Locks Tally with a PIN. Do not forget it: it cannot be found again."),
+        footer = when (kind) {
+            LockKind.OFF -> t("applock.help.choose", "Locks Tally with a PIN, a pattern, a password, or your phone's own lock.")
+            LockKind.OWN -> t("applock.help.own", "Tally asks for your {what} when you open it. Do not forget it: it cannot be found again.", "what" to typeNoun(type))
+            LockKind.PHONE -> t("applock.help.phone", "Keep the recovery code on paper. You need it to open a backup on a new phone, or if this phone's screen lock is ever removed.")
+        },
     ) {
         item {
             ARow(
-                if (on) t("applock.change", "Change the PIN") else t("applock.turnOn", "Turn on the lock"),
-                icon = Icons.Rounded.Lock, chevron = true,
-                onClick = { scope.launch { LockFlow.setOrChange(if (on) Crypto.type else "pin") } },
+                t("applock.lock", "Lock"), value = lockKindLabel(kind), sub = if (kind == LockKind.OWN) ownKindLabel(type) else null,
+                icon = Icons.Rounded.Lock, chevron = true, onClick = { choosing = true },
             )
         }
-        if (on) {
-            if (bioAvail) item {
-                SwitchRow(
-                    t("applock.fingerprint", "Unlock with fingerprint"), bioOn,
-                    { want ->
-                        scope.launch { if (want) LockFlow.enableBio() else { Bio.disable(); Ledger.bump() } }
-                    },
-                    Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                    icon = Icons.Rounded.Fingerprint,
+        when (kind) {
+            LockKind.OWN -> {
+                item {
+                    ARow(
+                        when (type) { "pattern" -> t("applock.change.pattern", "Change the pattern"); "password" -> t("applock.change.password", "Change the password"); else -> t("applock.change", "Change the PIN") },
+                        icon = Icons.Rounded.Password, chevron = true,
+                        onClick = { scope.launch { LockModes.useOwn(type) } },
+                    )
+                }
+                if (bioAvail) item {
+                    SwitchRow(
+                        t("applock.fingerprint", "Unlock with fingerprint"), bioOn,
+                        { want ->
+                            scope.launch { if (want) LockFlow.enableBio() else { Bio.disable(); Ledger.bump() } }
+                        },
+                        Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        icon = Icons.Rounded.Fingerprint,
+                    )
+                } else item { NoteRow(t("applock.noFingerprint", "To unlock with a fingerprint, first add one in your phone's settings.")) }
+            }
+            LockKind.PHONE -> {
+                item { NoteRow(t("applock.phoneNote", "Unlocks with your phone's screen lock or fingerprint")) }
+                item { ARow(t("recovery.show", "Show recovery code"), icon = Icons.Rounded.Key, chevron = true, onClick = { scope.launch { LockModes.showRecovery() } }) }
+            }
+            LockKind.OFF -> Unit
+        }
+    }
+    if (choosing) LockChooser(kind, type, onDismiss = { choosing = false }) { action -> choosing = false; scope.launch { action() } }
+}
+
+private fun lockKindLabel(kind: LockKind): String = when (kind) {
+    LockKind.OFF -> t("applock.kind.off", "Off")
+    LockKind.OWN -> t("applock.kind.own", "Tally's own lock")
+    LockKind.PHONE -> t("applock.kind.phone", "The phone's lock")
+}
+
+private fun ownKindLabel(type: String): String = when (type) {
+    "pattern" -> t("applock.own.pattern", "Pattern"); "password" -> t("applock.own.password", "Password"); else -> t("applock.own.pin", "PIN")
+}
+
+/** The small sheet behind the Lock row: Off, Tally's own lock (then PIN, pattern or password), or the phone's lock. */
+@Composable
+private fun LockChooser(kind: LockKind, type: String, onDismiss: () -> Unit, run: (suspend () -> Unit) -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val phoneWhy = remember { LockModes.phoneUnavailable(PhoneLock.offer(ctx)) }
+    var own by remember { mutableStateOf(false) }
+    val check: @Composable () -> Unit = { Icon(Icons.Rounded.Check, t("lang.selected", "Selected"), tint = Apple.colors.accent) }
+    EditSheet(t("applock.lock", "Lock"), onDismiss, onSave = null) {
+        if (!own) AGroup {
+            item {
+                ARow(
+                    lockKindLabel(LockKind.OFF), icon = Icons.Rounded.LockOpen, trailing = if (kind == LockKind.OFF) check else null,
+                    onClick = { if (kind == LockKind.OFF) onDismiss() else run { LockModes.turnOff() } },
                 )
-            } else item { NoteRow(t("applock.noFingerprint", "To unlock with a fingerprint, first add one in your phone's settings.")) }
-        }
-        if (on) item {
-            ARow(
-                t("applock.turnOff", "Turn off the lock"), icon = Icons.Rounded.LockOpen, tint = LocalSemantic.current.negative, titleColor = LocalSemantic.current.negative,
-                onClick = {
-                    scope.launch {
-                        if (Dialogs.ask(t("applock.off.ask", "Turn off the lock?\n\nAnyone who opens your phone will be able to see your loans."), t("applock.off.ok", "Turn off"), danger = true)) {
-                            Crypto.clearLock(); Bio.disable(); Ledger.persist(); lockChanged(); Ledger.bump()
-                        }
-                    }
-                },
-            )
+            }
+            item {
+                ARow(
+                    lockKindLabel(LockKind.OWN), sub = t("applock.own.sub", "A PIN, pattern or password just for Tally"),
+                    icon = Icons.Rounded.Password, chevron = true, trailing = if (kind == LockKind.OWN) check else null,
+                    onClick = { own = true },
+                )
+            }
+            item {
+                ARow(
+                    lockKindLabel(LockKind.PHONE), sub = phoneWhy ?: t("applock.phone.sub", "Your phone's screen lock or fingerprint, and a recovery code on paper"),
+                    icon = Icons.Rounded.Smartphone, trailing = if (kind == LockKind.PHONE) check else null,
+                    onClick = { if (kind == LockKind.PHONE) onDismiss() else run { LockModes.usePhone() } },
+                )
+            }
+        } else AGroup(footer = t("applock.own.help", "A PIN is the easiest.")) {
+            listOf("pin", "pattern", "password").forEach { k ->
+                item {
+                    ARow(
+                        ownKindLabel(k), icon = when (k) { "pattern" -> Icons.Rounded.Gesture; "password" -> Icons.Rounded.Password; else -> Icons.Rounded.Pin },
+                        trailing = if (kind == LockKind.OWN && type == k) check else null,
+                        onClick = { run { LockModes.useOwn(k) } },
+                    )
+                }
+            }
         }
     }
 }
@@ -310,9 +374,23 @@ private fun LockGroup() {
 @Composable
 private fun PrivacyGroup() {
     val rev = rememberLedger()
+    val scope = rememberCoroutineScope()
     val hidden = remember(rev) { DB.b("hideAmounts") }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    // read again on every redraw (and on coming back to the page): the phone's screen lock may have been set or removed meanwhile
+    val secure = remember(rev) { PhoneLock.deviceSecure(ctx) }
     AGroup(footer = t("hide.help", "Shows dots instead of amounts, in case someone is looking.")) {
-        item { SwitchRow(t("hide.title", "Hide amounts"), hidden, { v -> Ledger.edit { DB["hideAmounts"] = v } }, icon = Icons.Rounded.VisibilityOff) }
+        item {
+            SwitchRow(
+                t("hide.title", "Hide amounts"), hidden,
+                { v ->
+                    // hiding never asks; showing them again asks for the lock (or the phone's own lock), when there is one
+                    if (v) Ledger.edit { DB["hideAmounts"] = true }
+                    else scope.launch { if (LockModes.mayUnhide()) Ledger.edit { DB["hideAmounts"] = false } }
+                },
+                subtitle = LockModes.unhideNote(secure), icon = Icons.Rounded.VisibilityOff,
+            )
+        }
     }
 }
 

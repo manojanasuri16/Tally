@@ -10,6 +10,7 @@ import com.tally.book.data.Ledger
 import com.tally.book.sync.Notices
 import com.tally.book.ui.family.installSyncHooks
 import com.tally.book.ui.lock.Bio
+import com.tally.book.ui.lock.PhoneLock
 import com.tally.book.widget.NextPaymentData
 
 class TallyApplication : Application() {
@@ -22,6 +23,7 @@ class TallyApplication : Application() {
         Ledger.init(this)
         FileStore.init(this)
         Bio.init(this)
+        PhoneLock.init(this)
         installSyncHooks()
         Notices.init(this)
         DueNotices.init(this)
