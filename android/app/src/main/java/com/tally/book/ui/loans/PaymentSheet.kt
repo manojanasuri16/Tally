@@ -41,15 +41,20 @@ import kotlinx.coroutines.withContext
  */
 
 @Composable
-fun PaymentSheet(loanId: String, existing: Obj?, sms: String? = null, startKind: String? = null, onDismiss: () -> Unit) {
+fun PaymentSheet(loanId: String, existing: Obj?, sms: String? = null, startKind: String? = null, startAmount: Double? = null, onDismiss: () -> Unit) {
     val theLoan = remember(loanId) { loan(loanId) }
     if (theLoan == null) { LaunchedEffect(Unit) { onDismiss() }; return }
     val editing = existing != null
     val words = loanWords(theLoan)
     val given = isGiven(theLoan)
     /* a due row for the amount still owed starts the form as a part repayment of all of it */
-    val suggestion = remember(loanId, startKind) {
-        if (startKind == "principal") obj("kind" to "principal", "amount" to loanView(theLoan).num("owed")) else suggestPayment(theLoan)
+    val suggestion = remember(loanId, startKind, startAmount) {
+        when {
+            startKind == "principal" -> obj("kind" to "principal", "amount" to loanView(theLoan).num("owed"))
+            /* the pending row: the usual kind of payment for this loan, with all that is pending as the amount */
+            startAmount != null -> suggestPayment(theLoan).also { it["amount"] = startAmount }
+            else -> suggestPayment(theLoan)
+        }
     }
     val options = remember(loanId) { payKindOptions(theLoan.s("kind"), existing?.s("kind")) }
     val saved = remember { existing?.let { filesOf("payment", it.s("id")) } ?: emptyList() }

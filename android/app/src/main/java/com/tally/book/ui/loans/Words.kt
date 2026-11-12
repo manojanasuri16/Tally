@@ -106,3 +106,16 @@ fun splitPrivate(open: List<Obj>, owed: Map<String, Double>): Pair<List<Obj>, Pr
     fun sum(l: List<Obj>) = l.sumOf { owed[it.s("id")] ?: 0.0 }
     return shared to PrivateLoans(sorted, sum(taken), sum(given), taken.isNotEmpty(), given.isNotEmpty())
 }
+
+/**
+ * The small line under a due row's amount: "4 payments" when a weekly, fortnightly or daily loan has several this month, and
+ * "includes ₹3,600 pending" when part of the amount fell due before today. [pendingText] is the amount already formatted by the screen
+ * (through amtText, so the eye hides it). Null when there is nothing to add.
+ */
+fun dueRowNote(loan: Obj, pending: Double, count: Int, pendingText: String): String? {
+    val parts = ArrayList<String>(2)
+    if (count > 1 && loan.s("kind") == "bank" && com.tally.book.model.frequencyOf(loan) != "month")
+        parts.add(tp("home.payments", count, "{n} payment", "{n} payments"))
+    if (pending > 0.005) parts.add(t("home.includesPending", "includes {amt} pending", "amt" to pendingText))
+    return parts.joinToString(" · ").ifEmpty { null }
+}

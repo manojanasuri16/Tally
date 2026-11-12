@@ -10,6 +10,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -72,6 +73,9 @@ private fun LoanBody(id: String, d: Detail) {
     var logging by remember { mutableStateOf(false) }
     var editingLoan by remember { mutableStateOf(false) }
     var editingPayment by remember { mutableStateOf<Obj?>(null) }
+    var payingPending by remember { mutableStateOf(false) }
+    var changingRate by remember { mutableStateOf(false) }
+    var renewing by remember { mutableStateOf(false) }
     val pickers = rememberAttachPickers { p -> storeAll("loan", id, listOf(p)) }
 
     fun closeIt() {
@@ -107,10 +111,12 @@ private fun LoanBody(id: String, d: Detail) {
             if (closed) BigFigure(t("loan.closed", "Closed"), null, sub = subtitle, text = fmtISODate(loan.s("closedDate")).ifEmpty { "—" })
             else BigFigure(words.left, v.num("owed"), sub = subtitle)
 
+            if (!closed) PendingRow(loan, v) { payingPending = true }
             if (!closed) NextDue(loan, v)
             if (!closed) PrimaryButton(words.log, { logging = true }, Modifier.fillMaxWidth())
 
             Facts(loan, v)
+            RateChanges(loan, closed)
             PaymentsGroup(d, given, onEdit = { editingPayment = it })
 
             AGroup(title = t("doc.title", "Documents")) {
@@ -135,6 +141,8 @@ private fun LoanBody(id: String, d: Detail) {
             }
 
             AGroup {
+                if (!closed && kind == "bank" && interestMethod(loan) == "reducing") item { ButtonRow(t("loan.rateChange.title", "Rate changed")) { changingRate = true } }
+                if (!closed && hasRepayBy(kind) && v.s("repayBy").isNotEmpty()) item { ButtonRow(t("loan.renew.title", "Renewed")) { renewing = true } }
                 item { ButtonRow(t("loan.edit", "Edit loan")) { editingLoan = true } }
                 if (closed) item { ButtonRow(t("loan.reopen", "Open this loan again")) { Ledger.edit { reopenLoan(id) } } }
                 else item { ButtonRow(t("loan.close", "Close this loan")) { closeIt() } }
@@ -144,6 +152,9 @@ private fun LoanBody(id: String, d: Detail) {
     }
 
     if (logging) PaymentSheet(id, null, onDismiss = { logging = false })
+    if (payingPending) PaymentSheet(id, null, startAmount = v.num("pendingAmount"), onDismiss = { payingPending = false })
+    if (changingRate) RateChangeSheet(id, onDismiss = { changingRate = false })
+    if (renewing) RenewSheet(id, onDismiss = { renewing = false })
     editingPayment?.let { p -> PaymentSheet(id, p, onDismiss = { editingPayment = null }) }
     if (editingLoan) LoanSheet(loan, onDismiss = { editingLoan = false }, onSaved = { editingLoan = false })
 }
@@ -192,31 +203,97 @@ private fun NextDue(loan: Obj, v: Obj) {
     }
 }
 
+/** The warning row: what fell due and was not paid, in plain words. A tap opens Log payment with that amount. */
+@Composable
+private fun PendingRow(loan: Obj, v: Obj, onPay: () -> Unit) {
+    val count = v.num("pendingCount").toInt()
+    if (count <= 0 || v.num("owed") <= 0) return
+    val s = LocalSemantic.current
+    val amount = v.num("pendingAmount")
+    AGroup {
+        item(Space60) {
+            ARow(
+                pendingInWords(loan, amtText(amount), count), icon = Icons.Rounded.Warning, tint = s.warning, titleColor = s.warning,
+                sub = loanWords(loan).log, chevron = true, onClick = onPay,
+            )
+        }
+    }
+}
+
 @Composable
 private fun Facts(loan: Obj, v: Obj) {
     val kind = loan.s("kind")
     AGroup(title = t("loan.details", "Details")) {
         item { ARow(loanWords(loan).amount, money = loan.num("principal"), moneyColor = Apple.colors.label) }
         if (kind == "bank") {
-            item { ARow(t("loan.emi.short", "EMI"), money = v.num("emi"), moneyColor = Apple.colors.label) }
-            item { ARow(t("loan.rate", "Interest rate"), value = rateInWords(loan.num("rate"), "year")) }
-            item { ARow(t("loan.monthsLeft", "Months left"), value = fmtIN(v.num("monthsLeft"), 0)) }
+            val freq = v.s("frequency").ifEmpty { frequencyOf(loan) }
+            item { ARow(if (freq == "month") t("loan.emi.short", "EMI") else t("loan.emi.each.short", "Each payment"), money = v.num("emi"), moneyColor = Apple.colors.label) }
+            item { ARow(t("loan.rate", "Interest rate"), value = rateWithMethodInWords(v.num("currentRate"), "year", v.s("interestMethod"))) }
+            item {
+                ARow(
+                    t("loan.instalment", "Payments"),
+                    value = if (freq == "month") dueDayInWords(v.num("dueDay").toInt()) else instalmentDayInWords(loan),
+                )
+            }
+            item { ARow(t("loan.instalmentsLeft", "Payments left"), value = instalmentsInWords(v.num("instalmentsLeft").toInt(), freq)) }
             if (v.s("endDate").isNotEmpty()) item { ARow(t("loan.ends", "Last payment"), value = fmtISODate(v.s("endDate"))) }
         } else {
             if (v.b("noInterest")) item { ARow(t("loan.interest", "Interest"), value = t("loan.noInterest.choice", "No interest")) }
             else {
-                item { ARow(t("loan.rate", "Interest rate"), value = rateInWords(loan.num("rate"), loan.s("rateUnit"))) }
+                item { ARow(t("loan.rate", "Interest rate"), value = rateWithMethodInWords(loan.num("rate"), loan.s("rateUnit"), v.s("interestMethod"))) }
                 item { ARow(t("loan.interestPaid", "Interest is paid"), value = everyInWords(v.s("interestEvery").ifEmpty { interestEvery(loan) }).lowercase()) }
             }
-            if (kind == "gold" && loan.num("grams") > 0) item { ARow(t("loan.gold", "Gold"), value = t("loan.grams.value", "{g} grams", "g" to gram(loan.num("grams")))) }
+            if (kind == "gold") item { ARow(t("loan.pledged", "Pledged"), value = pledgeLabel(v.s("pledge"))) }
+            if (kind == "gold" && v.num("grams") > 0) item { ARow(t("loan.gold", "Gold"), value = t("loan.grams.value", "{g} grams", "g" to gram(v.num("grams")))) }
+            if (v.num("renewals") > 0) item {
+                ARow(
+                    t("loan.renewals", "Renewed"),
+                    value = tp("loan.renewals.count", v.num("renewals").toInt(), "{n} time", "{n} times"),
+                    sub = t("loan.renewals.last", "Last on {date}", "date" to fmtISODate(v.s("lastRenewal"))),
+                )
+            }
         }
         item { ARow(if (isGiven(loan)) t("loan.given", "Given on") else t("loan.taken", "Taken on"), value = fmtISODate(loan.s("startDate")).ifEmpty { "—" }) }
+        if (v.s("paidUpTo").isNotEmpty()) item { ARow(t("loan.paidUpTo.row", "Paid up to"), value = fmtISODate(v.s("paidUpTo"))) }
         if (loan.b("private")) item {
             ARow(t("loan.private", "Private"), sub = t("loan.keepPrivate.help", "Only on this phone. Not shared with family."), trailing = { PrivateMark() })
         }
         if (loan.s("note").isNotBlank()) item { NoteRow(loan.s("note")) }
     }
 }
+
+/** The rate changes of a bank loan, newest last, each with a delete (it asks first). Nothing is drawn when there are none. */
+@Composable
+private fun RateChanges(loan: Obj, closed: Boolean) {
+    val changes = rateChangesOf(loan)
+    if (changes.isEmpty()) return
+    val scope = rememberCoroutineScope()
+    AGroup(title = t("loan.rateChange.list", "Rate changes")) {
+        changes.forEach { c ->
+            item {
+                ARow(
+                    t("loan.rateChange.row", "{rate}% a year", "rate" to fmtIN(c.num("rate"), 2)),
+                    sub = listOfNotNull(
+                        t("loan.rateChange.since", "From {date}", "date" to fmtISODate(c.s("from"))),
+                        if (c.num("emi") > 0) t("loan.rateChange.emiRow", "New EMI {amt}", "amt" to amtMask(c.num("emi"))) else null,
+                    ).joinToString(" · "),
+                    trailing = if (closed) null else ({
+                        BarIcon(Icons.Rounded.DeleteOutline, t("loan.rateChange.delete", "Delete this rate change"), {
+                            scope.launch {
+                                if (Dialogs.ask(t("loan.rateChange.delete.ask", "Delete this rate change?\n\nThe loan goes back to the earlier rate from that date."), t("dlg.delete", "Delete"), danger = true))
+                                    Ledger.edit { removeRateChange(loan.s("id"), c.s("id")) }
+                            }
+                        }, tint = Apple.colors.secondaryLabel)
+                    }),
+                )
+            }
+        }
+    }
+}
+
+/** "Day 5 of each month". */
+private fun dueDayInWords(day: Int): String =
+    if (day in 1..31) t("loan.dueDay.value", "Day {n} of each month", "n" to day) else frequencyLabel("month")
 
 @Composable
 private fun PaymentsGroup(d: Detail, given: Boolean, onEdit: (Obj) -> Unit) {

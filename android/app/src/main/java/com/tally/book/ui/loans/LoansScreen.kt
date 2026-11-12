@@ -128,6 +128,7 @@ fun LoansScreen() {
     val home = remember(rev) { readHome() }
     var payFor by remember { mutableStateOf<PayFor?>(null) }
     var adding by remember { mutableStateOf(false) }
+    val offerReminders = com.tally.book.ui.family.rememberReminderOffer()
     var closedOpen by rememberSaveable { mutableStateOf(false) }
 
     val pull = rememberPullRefresh {
@@ -169,7 +170,7 @@ fun LoansScreen() {
     }
 
     payFor?.let { PaymentSheet(it.loanId, null, startKind = it.kind, onDismiss = { payFor = null }) }
-    if (adding) LoanSheet(null, onDismiss = { adding = false }, onSaved = { adding = false })
+    if (adding) LoanSheet(null, onDismiss = { adding = false }, onSaved = { adding = false; offerReminders() })
     ShareIntake()
 }
 
@@ -206,6 +207,7 @@ private fun DueSection(due: List<Obj>, onPay: (String, String?) -> Unit, onOpen:
             item {
                 DueRow(
                     loan, d.s("date"), d.num("amount"), d.b("overdue"), if (principal) w.toReturn else null, given,
+                    note = dueRowNote(loan, d.num("pending"), d.num("count").toInt(), amtText(d.num("pending"))),
                     onPay = { onPay(loan.s("id"), if (principal) "principal" else null) }, onOpen = { onOpen(loan.s("id")) },
                 )
             }
@@ -214,7 +216,7 @@ private fun DueSection(due: List<Obj>, onPay: (String, String?) -> Unit, onOpen:
 }
 
 @Composable
-private fun DueRow(loan: Obj, date: String, amount: Double, overdue: Boolean, tag: String?, given: Boolean, onPay: () -> Unit, onOpen: () -> Unit) {
+private fun DueRow(loan: Obj, date: String, amount: Double, overdue: Boolean, tag: String?, given: Boolean, note: String?, onPay: () -> Unit, onOpen: () -> Unit) {
     val s = LocalSemantic.current
     Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(start = 16.dp, end = 12.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).pressable(onClick = onOpen).padding(vertical = 4.dp)) {
@@ -225,6 +227,7 @@ private fun DueRow(loan: Obj, date: String, amount: Double, overdue: Boolean, ta
                 Text(if (tag != null) "$tag · $when_" else when_, style = Apple.type.subheadline, color = if (overdue) s.negative else Apple.colors.secondaryLabel, maxLines = 1)
             }
             Money(amount, style = Apple.type.title3, color = Apple.colors.label)
+            if (note != null) Text(note, style = Apple.type.footnote, color = Apple.colors.secondaryLabel)
         }
         Spacer(Modifier.width(12.dp))
         SecondaryButton(if (given) t("home.received", "Received") else t("home.pay", "Pay"), onPay, Modifier.heightIn(min = 48.dp).widthIn(min = 72.dp))
