@@ -6,6 +6,8 @@
     <!-- CAMERA is for scanning an invite QR code and taking photos of payments. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <!-- POST_NOTIFICATIONS is for one quiet notice to admins, naming nobody: "Someone wants to join your family". -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
@@ -35,7 +37,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
             </intent-filter>
-            <!-- invite links: tally://join#<familyId>.<key>.<name> -->
+            <!-- invite links: tally://join#t2.<familyId>.<secret>.<expires>.<name>[.<inviter>] -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

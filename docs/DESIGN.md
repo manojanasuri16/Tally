@@ -15,7 +15,7 @@ It is a sibling of Balance (`~/Balance/android`, package `com.balance.ledger`) a
   - `gold`: a gold loan. Interest is paid once a year; principal is repaid on closure.
 - Log a payment against a loan: amount, date, what it was for (EMI, interest, principal), and optionally a note, a pasted bank SMS, and photos or documents.
 - Keep each loan's documents.
-- Family sync: pull down to refresh. Every loan and payment shows who entered it.
+- Family sync: pull down to refresh. Every loan and payment shows who entered it. Admins let people in (one-time invites, approved by an admin), can remove members (the family's key is then replaced), and make others admins.
 - A loan is shared by default. A private loan, its payments and its files never leave the phone, except inside a backup file the person makes.
 - Backups: once a day into a folder on the phone (the newest 14 kept), Back up now through the share sheet, and Restore on a new phone.
 
@@ -27,8 +27,11 @@ Same conventions as Balance (`android/PORTING.md` there): `DB` is an `Obj`/`Arr`
 DB = {
   v: 1,
   me:      { id, name },                       // this phone's person; id = uid("m")
-  family:  { id, key, name } | absent,          // key: base64 of 32 random bytes; absent until created or joined
-  members: [ { id, name, at, updatedAt, updatedBy, deleted? } ],
+  family:  { v: 2, id, name, creator, me: { secret, notice, pub, priv }, keys: { "<epoch>": key }, relayEpoch,
+             role, roster, invites, pins, usedInvites } | absent,   // sync/Membership.kt; absent until created or let in
+  joining: { fam, name, inviter, invite, s, me, at, expires } | absent,  // a join request waiting for an admin
+  familyGone: { name, why, at } | absent,       // "removed" | "denied" | "expired": told once on screen
+  members: [ { id, name, pub, invite?, left?, at, updatedAt, updatedBy, deleted? } ],
   loans:   [ { id, kind, name, lender, principal, rate, startDate, tenureMonths, emi, dueDay,
                interestEvery,                   // "month" | "year" (hand: default month; gold: default year)
                rateUnit,                        // "year" (default: percent a year) | "month" (percent a month; "2 rupees interest" = 2) (hand, gold)
@@ -55,62 +58,154 @@ DB = {
 
 ## Sync
 
-### Keys
+Sync version 2 (Tally 0.3.0). Families made by 0.1.0/0.2.0 (one shared key inside the invite, one family token) are not carried over: see "Old families".
 
-- `family.key` (32 random bytes) is made on the phone that creates the family and travels only inside the invite.
-- From it, by HKDF-SHA256:
-  - `encKey` = HKDF(key, info "tally-enc"): AES-256-GCM for every record and file.
-  - `authToken` = HKDF(key, info "tally-auth"), hex: proves membership to the relay. The relay stores only its SHA-256.
-  - HKDF has no salt (RFC 5869's all-zero default) and a 32-byte output; the relay stores `sha256(authToken)` as hex (`sync/SyncCrypto.kt`).
-- Record AAD: `"tally:<familyId>:<recordId>"`. File AAD: `"tally-file:<familyId>:<fileId>"`. A blob cannot be replayed under another id.
-- A sealed blob is base64 (standard, padded) of `version (1 byte, now 1) || iv (12 random bytes) || ciphertext || GCM tag (16)`. The version byte is also fed to GCM as additional data ahead of the AAD, so it cannot be changed undetected; a later format bumps it.
+### Keys and epochs
+
+- **The family keyring:** `(epoch, key)` pairs, each key 32 random bytes, epoch 1 made by the phone that creates the family. A new epoch is made by an admin's phone whenever someone is removed or leaves (see "Membership"). Phones keep every epoch they were given, so everything written before stays readable to current members; nothing is ever re-encrypted.
+- **Why old records are not re-encrypted:** everything sealed under an old key was readable by whoever held that key, and a removed member keeps their copies anyway; re-sealing would cost every phone a full re-upload (and the free tier the bytes) and take nothing away from anyone. What matters is that nothing *new* is written under a key a removed member held, and the relay refuses exactly that (`p_epoch` must be the family's newest).
+- `encKey(epoch)` = HKDF-SHA256(key of that epoch, no salt, info `"tally-enc"`, 32 bytes): AES-256-GCM for every record, file and invite box.
+- Record AAD: `"tally:<familyId>:<recordId>"`. File AAD: `"tally-file:<familyId>:<fileId>"`. A blob cannot be replayed under another id or family.
+- A sealed blob (version 2) is base64 (standard, padded) of `2 || epoch (4 bytes, big-endian) || iv (12) || ciphertext || GCM tag (16)`; the 5-byte header is fed to GCM ahead of the AAD, so neither the version nor the epoch can be changed undetected. Version 1 blobs (`1 || iv || ct`, one key, no epoch) are still readable by `SyncCrypto.open`, but nothing writes them and the v2 relay holds none.
+- **Member identity:** for each family it joins, a phone makes an EC P-256 key pair (JDK/Android `KeyPairGenerator` + `KeyAgreement` ECDH; no new dependency) and two random 32-byte credentials: the **relay secret** (hex; the relay stores only its SHA-256) and the **notice token** (hex; can only ask "any join requests?"). All three live in `DB.family.me`.
+- **Sealing to a member** (key boxes): ECIES. An ephemeral P-256 key pair, ECDH with the recipient's public key, HKDF-SHA256(Z, salt = ephemeral SPKI ‖ recipient SPKI, info `"tally-box-v1|" + context`), AES-256-GCM with the context as AAD. Blob: base64(`1 || ephemeral SPKI (91 bytes) || iv || ct`). Context: `"tally-box:<familyId>:<memberId>:<epoch>"`, so a box opens only for that member and epoch.
+- **Where the private key lives, and why:** in the book (`DB.family.me.priv`, PKCS#8), next to the keyring. Android Keystore can do ECDH only from API 31 (minSdk is 29), and a Keystore key cannot go into a backup, while a restored phone must stay the same member (it needs the private key to open keys sealed to it after the backup was taken, and the secret to talk to the relay). The book is sealed with the app lock when one is set, so the private key is exactly as protected as the family keys it guards; without a lock both are plain on the phone (as the family key always was). A backup therefore holds the member's credentials and keyring (see "Backups").
 
 ### Invite
 
-`tally://join#<familyId>.<base64url(key)>.<base64url(familyName)>.<base64url(inviterName)>` (base64url without padding), shown as a QR code and shareable as text. The inviter is the inviting phone's `me.name`; the fourth part is optional, so the three-part invites of 0.1.0 still parse (the inviter is then unknown). The other phone scans it, or pastes it into "Join with a code". The fragment is never sent to any server. Whoever holds an invite can join, so it is shown only on demand, and every member appears in the members list.
+`tally://join#t2.<familyId>.<secret>.<expires>.<base64url(familyName)>[.<base64url(inviterName)>]` (base64url without padding), shown as a QR code and shareable as text. **It never carries a family key.**
 
-- The family id is 16 random bytes, base64url (22 characters): it is the only thing between a stranger and the endpoint's rows besides the token, so it is never a `uid()`.
-- The family name is 1 to 80 characters, no control characters; so is the inviter's name (a longer one is shortened when the invite is made, a blank one is left out). `Invite.parse` is strict and returns null for anything else (a fifth part, padding, a key that is not 32 bytes, invalid UTF-8, an empty or over-long name); the whole text is at most 1024 characters.
-- One family name, typed once by whoever starts the family; everyone who joins stores that same name (`DB.family.name`), never the inviter's.
+- **Fresh each time:** every "Invite someone" makes a new invite: 32 random bytes `secret`, used once, valid 24 hours, cancellable. Any member can make one; only admins let anyone in.
+- `expires`: epoch seconds, decimal; the phone that scans refuses an expired code before asking anything. The relay keeps its own 24 hours.
+- From the secret: `inviteId` = base64url(HKDF(secret, `"tally-invite-id"`, 16 bytes)) (the only name the relay knows the invite by), `requestKey` = HKDF(secret, `"tally-join-req"`), `grantKey` = HKDF(secret, `"tally-grant"`). The secret itself never reaches the relay: the inviting phone registers the invite as `inviteId` plus an **invite box** (`{ s, by, exp }` sealed under the family's newest key, AAD `"tally-invite:<familyId>:<inviteId>"`), so the family's admins (members) can recover the secret and nobody else can.
+- The family id is 16 random bytes, base64url (22 characters). Names: 1 to 80 characters, no control characters (a longer inviter name is shortened, a blank one left out). `Invite.parse` is strict (exactly the tag `t2`, canonical base64url, a 32-byte secret, a canonical decimal expiry, valid UTF-8 names); the whole text is at most 1024 characters. `Invite.find` picks the link out of a whole shared message.
+- **Old invites** (`tally://join#<familyId>.<key>.<name>[.<inviter>]`, three or four parts, from 0.1.0/0.2.0) are recognised by `Invite.isOld` and refused with "This code is from an older Tally. Ask for a new one."
+- One family name, typed once by whoever starts the family; everyone who joins stores that same name, never the inviter's.
+
+### Joining (approval)
+
+1. **Scan.** The joining phone parses the code, refuses it if expired, and asks "<Inviter> is inviting you to <family>. Join?" (both names from the code).
+2. **Request.** It makes its identity (key pair, relay secret, notice token) and sends `tally_join_request(familyId, inviteId, memberId, sha256(secret), sha256(notice), blob)`, where `blob` = AES-GCM under `requestKey` of `{ name, pub }` with AAD `"tally-join:<familyId>:<inviteId>:<memberId>"`. The relay marks the invite used (one request per invite) and keeps the request for 72 hours. The phone keeps `DB.joining` (the family's name, the inviter, the invite id and secret, its new identity); nothing of the family is in the book yet.
+3. **Notice.** Admins' phones see the request on their next sync (and the background check, "Notices", says that someone asked).
+4. **Check (admin's phone).** From `tally_state` it gets the request with the invite's box. It refuses (and turns down at once, so nothing is shared) a request when: the invite box is not sealed under the family's current epoch, does not open, names another maker than the relay says, or its secret does not derive this invite id; the request blob does not open under that invite's `requestKey` for exactly this member id (so a swapped public key or member id fails); the member is already active; this phone has already decided that invite, or any member's record names it (a replay); two requests come for one invite. Otherwise it shows "<name> wants to join <family>. <inviter> invited them. Allow?" (the name from the sealed request, the inviter from the invite box).
+5. **Allow.** The admin's phone seals a **grant** to the joiner's public key: every key the family has (epochs 1..now), the admin's pinned member keys, the creator's id, and a MAC under `grantKey` over all of it (bound to family, member, public key and invite id). `tally_request_decide(allow, epoch, box)` makes the joiner an active member with the credentials it sent, stores the grant as its box for the current epoch, and deletes the request and the invite. The admin's phone also writes the new member's record (name, public key, invite id) so every phone pins the key the admin checked. **Don't allow**: `tally_request_decide(allow = false)` keeps the request as `denied` until it expires; nothing is shared.
+6. **In.** The joining phone polls `tally_join_status` on each sync (`pending` / `denied` / `approved` / `removed`, or gone). On `approved` it fetches its boxes, opens the grant with its private key and checks the MAC with the invite's `grantKey`; a grant that does not check out (a relay that sealed keys of its own to the joiner's public key) is refused and the phone keeps waiting. Then it enters the family as on create (every record marked dirty, every live file queued) and syncs. On `denied` or a request that expired it forgets the request and says so once (`DB.familyGone`).
+
+### Membership: admins, removing, leaving
+
+The rules (enforced by the relay, `supabase/migrations/*_tally_membership.sql`, and mirrored by `FakeRelay` in the tests):
+
+- Whoever creates the family is its **creator** and first **admin**.
+- An admin can make any active member an admin, and take the role from any admin, except: never from the last admin, and never from the creator (only the creator can step down). (The owner's rule "nobody can remove the creator" is extended to the creator's admin role, so the creator cannot be quietly sidelined either.)
+- An admin can remove any active member, another admin included, except the creator and themselves (they leave instead). Nobody can remove the creator; the creator can leave.
+- Any member can leave on their own. If the last admin leaves, the longest-standing remaining member (earliest joined, then id) becomes admin. When the creator leaves the family has no creator any more (nobody is protected). When the last member leaves, the family and everything it holds on the relay is deleted.
+- Any member can make an invite and cancel their own; an admin can cancel any. Only admins see and decide join requests.
+
+**Removing** (`tally_member_remove`), in one relay transaction: the member's status becomes `removed`, so every call with their credentials fails from that commit on (`TA001`); the family moves to epoch `n+1`; the admin's phone has made the new key and sealed a **rotation box** to each remaining active member whose public key it has pinned (its own included): `{ keys from has+1 .. n+1, MAC under HKDF(key of epoch has, "tally-box-auth") }`, where `has` is the newest epoch that member was given. A box for the removed member, or for anyone not active, is refused. Every open invite and request is deleted. On the removed phone the next sync (any call) hears `removed`: it forgets the family (like leaving), keeps every record, and says once "You were removed from the family. Your loans stay on this phone." **What the removed person already has stays on their phone: the records, files and old keys they synced before. Nothing can claw that back.** What they can no longer do is read anything new (the relay will not serve them, and new data is under a key they never had) or write anything.
+
+**Leaving** (`tally_leave`): the status becomes `left`, their invites go, the successor rule above applies, and the family is marked `rotate`: the next sync of an admin's phone makes a new epoch the same way (`tally_rotate`). Without internet the phone leaves locally at once and tells the relay on a later sync (`DB.leaving`).
+
+**A phone that missed a rotation** finds its boxes in `tally_state` on the next sync and opens them in order (each proved by a key it already holds). A member the rotating phone could not seal to (no pinned key yet, or let in while the rotation was being made) has `has` < the family's epoch; the next sync of any admin's phone that has its pinned key gives it a box (`tally_box_put`). Until then that phone reads but pushes nothing (`SyncResult.Done(waitingForKey = true)`).
+
+**Pins:** a member's public key is pinned the first time a phone learns it (its own; the admin's check at approval; a grant's pins; a member record's `pub`), and a pinned key is never replaced by a later record (only an admin approving that member id again replaces it). Rotation boxes are sealed only to pinned keys, never to anything the relay says.
+
+**Concurrency:** every relay function that changes a family takes that family's advisory lock before checking the caller, so two admins acting at once are put in one order and see each other's result. Approvals, rotations, removals and pushes carry the epoch they were made for; a stale one fails with `TA002` and the phone refreshes and retries (up to three times). Two admins approving one request: the second gets "gone". One removing while another rotates: the second's epoch is stale; a rotation that lost to another one is simply dropped (the other one already rotated).
+
+### Threat model
+
+The relay is trusted for availability only, never for confidentiality or for who is who.
+
+- **A hostile relay (or anyone who reads its database)** sees: family ids, member ids, roles, statuses, epochs, invite ids, record ids and kinds, sizes, timing, hashes of credentials, and ciphertext. It **cannot**: read any record, file, name, request or key (all sealed under keys it never has); forge a record (AES-GCM, AAD bound to family and id); swap a joiner's public key or member id in a request (the request is sealed under a key derived from the invite's secret, which it never sees); impersonate an admin to a joiner (the grant's MAC needs the invite's secret); hand a member a key of its own (a rotation box's MAC needs the member's previous key, a grant's the invite's secret); make an admin seal a new key to it (rotation boxes go only to pinned keys); get a replayed invite through (one request per invite; the admin's phone refuses invites it has decided and any second request). It **can**: refuse service, drop or delay anything, hide a rotation or a request, show stale state, and learn the metadata above. A phone that is shown a newer epoch it cannot verify simply waits (nothing is written under a key it cannot check).
+- **A removed member** (with an honest relay): rejected at once for every call; cannot read anything written after the removal (new epoch), cannot write. Keeps what was already on their phone.
+- **A removed member colluding with the relay operator** (out of scope, stated plainly): the relay could hide the rotation from a phone, which would then keep writing under the old key the removed member holds; or hide the removal record from another admin, which might later seal keys to them. Detecting a hiding relay would need signed membership history; not in this version.
+- **A leaked QR / invite text** (someone photographs the code): they can send one join request, within 24 hours, before the real joiner does. An admin must still allow it, and sees the name they typed and who made the invite; the real joiner's request then fails ("does not work, ask for a new one"), which is the signal. Cancelling the invite stops it. A leaked code never gives anyone the family's data by itself.
+- **A stolen unlocked phone or a plain backup** holds the member's credentials and keys: it is that member. An admin removing that member ends it for everything new.
+- **A current member** can read everything they are given and write what they like (as in version 1); trust within the family is the point.
 
 ### The relay (Supabase)
 
-Row level security is on for every table with no policies, so the anon key can reach nothing directly. All access is through `security definer` functions that check the token:
+`supabase/migrations/20261112013706_tally_membership.sql` (and `20261112020514_tally_not_admin_code.sql`). Row level security is on for every table with no policies and no grants to `anon`/`authenticated`, so the Data API reaches nothing directly. All access is through `security definer` functions in `public` with `search_path = ''`; helpers live in the unexposed `tally_private` schema.
 
-- `tally_family_create(family_id, token_hash)`
-- `tally_push(family_id, token, rows jsonb)` → rows are `{ id, kind, blob }`; each upsert takes the next value of a per-database sequence as `seq`
-- `tally_pull(family_id, token, since bigint, max int)` → `{ id, kind, blob, seq }` ordered by `seq`
-- `tally_blob_put(family_id, token, id, data)` / `tally_blob_get(family_id, token, id)` for encrypted file bytes (base64 text)
-- `tally_ping()` returns 1 after reading one row; no token. A daily GitHub Action (`.github/workflows/keep-awake.yml`) calls it so the free project is never paused.
+Tables: `tally_family` (id, creator, epoch, rotate, record_count, blob_bytes), `tally_member` (family, id, secret_hash, notice_hash, role, status, has_epoch, joined_at), `tally_invite`, `tally_request`, `tally_box`, `tally_record`, `tally_blob`. The version-1 tables (`tally_families`, `tally_records`, `tally_blobs`, sequence `tally_seq`) are left in place with their rows, unreachable; a later migration can drop them.
 
-Every tokened function hashes the token with SHA-256 and compares it to the family's `token_hash`; an unknown family and a wrong token give the same error (SQLSTATE 28000). `tally_family_create` is idempotent for the same hash and refuses a different hash for an existing id. Limits: ids `[A-Za-z0-9_-]{1,64}` (family ids exactly 22), kind one of the four, at most 500 rows per push and 500 per pull, a record blob at most 64 KiB, a file blob at most 6 MiB. Pushes to one family take a per-family advisory lock before taking seq values, so seqs become visible in order within a family and paging by `seq > cursor` never skips a row (the reasoning is in the migration). There is no delete function: a family's rows stay on the relay after everyone leaves.
+Functions (every `p_secret` is checked by hashing it and comparing with the member's `secret_hash`; an unknown family, unknown member, wrong secret or a member who left all give the same `28000`; a removed member gets `TA001`):
 
-The relay sees: family id, record ids, record kind, sizes and timing. It never sees names, amounts, notes, messages or file contents.
+| Function | Who | What |
+|---|---|---|
+| `tally_family_create(p_family, p_member, p_secret_hash, p_notice_hash)` | anyone | new family, caller = creator + admin, epoch 1; idempotent for the same creator |
+| `tally_state(p_family, p_member, p_secret, p_after)` | member | epoch, creator, rotate, my role, active members (role, since, has), my boxes after `p_after`, live invites, open requests (admins only) |
+| `tally_push(…, p_epoch, p_rows)` / `tally_pull(…, p_since, p_max)` | member | records, as in version 1; push refused unless `p_epoch` is the family's newest |
+| `tally_blob_put(…, p_epoch, p_id, p_data)` / `tally_blob_get(…, p_id)` | member | file blobs, same epoch rule |
+| `tally_invite_create(…, p_invite, p_box)` → expiry ms | member | one-time invite, 24 h |
+| `tally_invite_cancel(…, p_invite)` | its maker, or an admin | |
+| `tally_join_request(p_family, p_invite, p_member, p_secret_hash, p_notice_hash, p_blob)` → expiry ms | anyone with the invite id | uses the invite up; request kept 72 h |
+| `tally_join_status(p_family, p_invite, p_member, p_secret)` | the joiner | approved / pending / denied / removed, `TA005` when gone |
+| `tally_join_cancel(…)` | the joiner | withdraws the request |
+| `tally_request_decide(…, p_invite, p_allow, p_epoch, p_box)` | admin | allow (member + grant box) or deny |
+| `tally_member_role(…, p_target, p_admin)` | admin | the role rules above |
+| `tally_member_remove(…, p_target, p_epoch, p_boxes)` | admin | remove + rotate, one transaction |
+| `tally_rotate(…, p_epoch, p_boxes)` | admin | new epoch |
+| `tally_box_put(…, p_epoch, p_boxes)` | admin | boxes for members who lack the newest |
+| `tally_leave(p_family, p_member, p_secret)` → 'left' / 'deleted' | member | |
+| `tally_pending(p_family, p_member, p_notice)` → count | the notice token | 0 unless an active admin |
+| `tally_ping()` → 1 | anyone | keep-awake; also deletes expired requests and invites |
 
-The phone talks to PostgREST with `HttpURLConnection` (no SDK). The project URL and anon key come from Gradle properties `TALLY_SUPABASE_URL` / `TALLY_SUPABASE_ANON_KEY` into `BuildConfig`. The SQL lives in `supabase/migrations/`.
+Error codes: `28000` unauthorised, `TA001` removed, `TA006` not an admin, `TA002` stale (sync and retry), `TA003` a limit, `TA004` a rule refuses, `TA005` invite or request not usable, `22023`/`54000` bad or too large input. (Not-an-admin was `42501` in the first migration; PostgREST sends that as HTTP 401, whose body `HttpURLConnection` drops for a fixed-length POST, so it became `TA006`.)
+
+Ordering is as in version 1: every upsert takes the next value of `tally_record_seq` under the family lock, so seqs become visible in order within a family and paging by `seq > cursor` never skips a row.
+
+The phone talks to PostgREST with `HttpURLConnection` (no SDK). The project URL and anon key come from Gradle properties `TALLY_SUPABASE_URL` / `TALLY_SUPABASE_ANON_KEY` into `BuildConfig`.
+
+### Limits
+
+Chosen for a family app on Supabase's free tier (500 MB database), so that a stranger cannot fill it:
+
+| Limit | Value |
+|---|---|
+| active members per family | 20 |
+| live (unused, unexpired) invites per family | 5 |
+| open join requests per family | 5 |
+| records per family | 20 000 |
+| file blobs per family | 100 MiB in total (a file blob at most 6 MiB) |
+| new families, across the whole relay | 20 per hour |
+| invite lifetime / request lifetime | 24 hours / 72 hours |
+| rows per push / per pull | 500 / 500 |
+| record blob | 64 KiB |
+
+A join request needs a live invite id (derived from a secret only the QR has), so strangers cannot send requests at all. Expired invites and requests are deleted by the next invite or request in that family and by the daily `tally_ping`. A family whose last member leaves is deleted with everything in it.
 
 ### One refresh
 
-1. **Pull** everything with `seq > sync.cursor`. For each row, decrypt and:
-   - not dirty locally → take the remote record;
-   - dirty locally → keep whichever has the later `updatedAt` (ties: the greater `updatedBy`); if remote wins, clear the dirty mark.
-   Advance `cursor`.
-2. **Push** every dirty record that is not private. On success clear its dirty mark.
-3. **Files:** upload the bytes of each id in `sync.blobsUp`; download bytes for any file record that has none locally (lazily is fine: on first open).
+0. A leave the relay has not heard of is sent. A waiting join request is checked (`tally_join_status`); once allowed, the grant is checked and the family entered.
+1. `tally_state`: new key boxes are opened (each proved with a key already held) and the keyring grows; the roster, my role and the creator are cached in `DB.family` for the screens. Removed → forget the family, keep the records, say so once.
+2. **Pull** everything with `seq > sync.cursor`; each row is opened with the key of the epoch in its header, then merged exactly as in version 1 (not dirty → take; dirty → last writer by `updatedAt`, then `updatedBy`). Member public keys in pulled records are pinned. The cursor moves in the same save as the page it covers.
+3. **An admin's phone:** rotates if the family is marked `rotate`, gives boxes to members lacking the newest key, and checks open join requests (`SyncEngine.requests`); requests that do not check out are turned down.
+4. **Push** every dirty record that is not private, sealed under the newest epoch, with that epoch (a phone that lacks the newest key pushes nothing).
+5. **Files:** upload the bytes of each id in `sync.blobsUp` (same epoch rule); download bytes for any live file that has none locally.
 
-On the wire a record is the sealed envelope `{ "k": "loan"|"payment"|"file"|"member", "r": { ...the record... } }`. The wire kind sits outside the record because loans and payments have their own `kind` field. It must match the relay row's `kind` and `r.id` must match the row id, or the row is skipped. Fields that describe only this phone's copy (a file's `enc`) are not sent, and a pulled record keeps the local value. Merge is per record, last writer wins. Payments are separate records, so two people logging payments never collide.
+On the wire a record is the sealed envelope `{ "k": "loan"|"payment"|"file"|"member", "r": { ...the record... } }`, as in version 1, and the merge, privacy and restore rules below are unchanged. A member record now also carries `pub` (that member's public key in this family), `invite` (the invite it came in with) and, once removed or gone, `left: true`.
 
 Refinements in `sync/`:
-- The cursor moves in the same save as the page it covers, so a sync that stops halfway resumes. A dirty mark is cleared after a successful push only if the record has not changed since it was collected (an edit during the push stays dirty).
+- A dirty mark is cleared after a successful push only if the record has not changed since it was collected (an edit during the push stays dirty).
 - A record that is private on this phone is never replaced by a pulled row. If someone else's edit of it arrives, it is ignored and the record is marked dirty again, so this phone's tombstone goes back up and wins.
 - Pushing a private record: if its id is in `sync.pushed` the push is a bare tombstone `{ id, deleted: true, updatedAt, updatedBy }`, otherwise nothing is sent. A payment or file whose owner cannot be found counts as private when pushing (fail closed).
-- Creating or joining marks every record dirty and every live file for upload, so a phone that already had loans shares them. Joining checks the invite with one pull before anything is saved. Leaving removes `family` and `sync` and keeps every record.
+- Creating or entering a family marks every record dirty and every live file for upload, so a phone that already had loans shares them. Leaving removes `family` and `sync` and keeps every record.
 
 Making a shared loan private pushes tombstones for the loan, its payments and its files, and keeps the local copies. Making a private loan shared marks them all dirty.
 
-Sync runs only when asked (pull to refresh, or the Sync button) and once each time the book becomes ready (app open or after unlock) if a family exists. No background work. A sync started from a screen runs in the app's own scope (`Sync.detached`), so closing the screen does not stop it halfway; if its caller is cancelled anyway, the engine's `running` flag is cleared.
+Sync runs when asked (pull to refresh, the Sync button), once each time the book becomes ready (app open or after unlock) if a family exists or a join is waiting, and after every membership action. A sync started from a screen runs in the app's own scope (`Sync.detached`), so closing the screen does not stop it halfway.
 
-A file's bytes are fetched on first open (`SyncEngine.fetchFile`) with a visible "Getting the file…" state. A private loan's files stay in `sync.blobsUp` and are never uploaded; a tombstoned file is dropped from the queue and never asked for.
+A file's bytes are fetched on first open (`SyncEngine.fetchFile`). A private loan's files stay in `sync.blobsUp` and are never uploaded; a tombstoned file is dropped from the queue and never asked for.
+
+### Notices
+
+No push service and no Firebase. Join requests reach an admin as:
+- `SyncEngine.requests` (a `StateFlow<List<JoinRequest>>`), refreshed by every sync, which runs when the app opens or is refreshed: the home card is built from it.
+- A quiet background check (`sync/Notices.kt`): a WorkManager periodic job every 4 hours, network required, scheduled only while this phone is an admin. It calls `tally_pending` with the **notice token** (kept in `DevicePrefs` as `tally-notice`, because the worker runs while the book may be sealed; the book keeps its own copy so a restore brings it back on the first sync) and, when more requests wait than the app last saw, posts one notification on the channel "Family": "Someone wants to join your family" / "Open Tally to answer." It names nobody and shows nothing from the book, so it is safe on a locked phone. Tapping it opens the app on the Family page (`MainActivity.EXTRA_OPEN`, taken after unlock). On Android 13+ it needs `POST_NOTIFICATIONS`, asked through `ui/family/rememberNoticePermission()` at a moment the screens choose.
+
+### Old families
+
+A book whose `DB.family` has no `v: 2` (it has `key`) was made by 0.1.0/0.2.0. Its relay functions are gone, so a sync answers `SyncResult.OldFamily` ("Sharing needs setting up again…"); `leaveFamily()` forgets it (records stay), and starting or joining a family again re-pushes every record under the new one.
 
 ### Files
 
@@ -127,8 +222,8 @@ Follows Balance's `android/UI.md` kit, simplified, plus the apple-design rules (
 - **Loan:** what is owed, next due date and amount, payments (newest first, each with who logged it), documents, Edit, Close loan.
 - **Add / edit loan (sheet):** kind first as three big choices; then only that kind's fields. "Keep private" toggle, off by default.
 - **Log payment (sheet):** amount (pre-filled with the EMI or interest due), date (today), kind, then optional: note, paste bank message, add photo, add document.
-- **Family:** `ui/family/`. With no family yet: a short explanation and two large choices, "Start sharing" (asks "Give your family a name", with a placeholder example and no default; Start stays off until something is typed) and "Join my family". In a family: the members ("You" on mine, "joined <date>"), Invite someone (a sheet with the QR, "Ask them to open Tally → Family → Join, and scan this", a Share button that sends the invite text through the system share sheet, and "Anyone with this code can join. Share it only with family."), Sync now with the last-synced time, and Leave family (asks; the records stay on this phone). Below, always: My name, Language (English, Telugu, Hindi), App lock (turn on, change, turn off, through `LockFlow`), Backup (below), Hide amounts, and the version.
-- **Join (`family/join`):** "Scan the code" (a full-screen CameraX scanner, `family/scan`, ZXing decoding on a background thread; the camera permission is asked there, with "Paste the code instead" if it is refused) or a Paste button and field (the whole shared message may be pasted: `Invite.find` picks the link out of it). A valid invite always goes through "<Inviter> is inviting you to <family name>. Join?" (or "Join <family name>?" when the invite does not say who sent it; both names come from the invite) before anything is saved. An invite link that opens the app (`pendingInvite`) is taken after unlock and the welcome name, with the same question; if the phone is already in a family it says so and does nothing.
+- **Family:** `ui/family/`. With no family yet: a short explanation and two large choices, "Start sharing" (asks "Give your family a name", with a placeholder example and no default; Start stays off until something is typed) and "Join my family". In a family: the members ("You" on mine, "joined <date>"), Invite someone (a sheet with the QR, "Ask them to open Tally → Family → Join, and scan this", a Share button that sends the invite text through the system share sheet, and "This code works once, for 24 hours. A family admin still has to allow whoever uses it."; each opening of the sheet makes a fresh invite on the relay), Sync now with the last-synced time, and Leave family (asks; the records stay on this phone). Below, always: My name, Language (English, Telugu, Hindi), App lock (turn on, change, turn off, through `LockFlow`), Backup (below), Hide amounts, and the version.
+- **Join (`family/join`):** "Scan the code" (a full-screen CameraX scanner, `family/scan`, ZXing decoding on a background thread; the camera permission is asked there, with "Paste the code instead" if it is refused) or a Paste button and field (the whole shared message may be pasted: `Invite.find` picks the link out of it). A valid invite always goes through "<Inviter> is inviting you to <family name>. Join?" (or "Join <family name>?" when the invite does not say who sent it; both names come from the invite) before anything is saved; Join sends the request ("Asked to join. Someone in your family needs to allow it…") and the phone enters the family on a later sync once an admin allows it. A code from 0.1.0/0.2.0 says "This code is from an older Tally. Ask for a new one." An invite link that opens the app (`pendingInvite`) is taken after unlock and the welcome name, with the same question; if the phone is already in a family it says so and does nothing.
 - **Home:** pull down runs one sync and speaks only if it failed (one plain sentence) or if there is no family yet (offering "Set up"). The quiet line under the figure reads "Shared with family · synced 5 min ago", "Syncing…", "Not shared yet" (tap: Family) or "Couldn't sync · tap to retry".
 - **Home groups:** after the figure and the due lists: Bank, From a person, Gold, Money I gave, then **Only on this phone**, then Closed. Open private loans (taken and given) appear only in "Only on this phone", whose header shows what is still to pay and to come back on them, with the line "Your family doesn't see these."; the top totals and the due lists still include them. Closed private loans stay in Closed.
 
@@ -146,9 +241,9 @@ Follows Balance's `android/UI.md` kit, simplified, plus the apple-design rules (
 
 A backup copies what is on disk, so it needs no secret and runs while the app is locked or not running. It is taken under `FileStore.filesExclusive` (no lock pass or downloaded file meanwhile), each record read under `FileStore.io` and the book under the ledger's disk lock, so it never copies a half-written file (AtomicFile on Android 10 rewrites in place behind a `.bak`; a `.bak` left by a crash is read as the good copy). An open book is saved first.
 
-Not in a backup: anything device-only (language, the backup folder and its state, fingerprint unlock, the re-lock delay copy in `DevicePrefs`, WorkManager's own records). Everything in the book is: loans, payments, private loans, files, `me`, `family` (including its key) and `sync`.
+Not in a backup: anything device-only (language, the backup folder and its state, fingerprint unlock, the re-lock delay copy in `DevicePrefs`, the notice token copy for the background check, WorkManager's own records). Everything in the book is: loans, payments, private loans, files, `me`, `family` (its keyring, this member's relay secret, notice token and private key), a waiting `joining`, and `sync`.
 
-Without a lock the file is plain and contains the family's key: the Backup group's footer and the share question say so in one line ("anyone who gets this file can read your loans and join your family").
+Without a lock the file is plain and contains the family's keys and this member's credentials: whoever has it can read the family's loans and act as this member until an admin removes them. The Backup group's footer and the share question say so in one line ("anyone who gets this file can read your loans and join your family").
 
 ### Daily, and Back up now
 
@@ -180,10 +275,12 @@ The lock after a restore:
 
 The restored book keeps its `sync` (cursor, dirty marks, `pushed`, `blobsUp`), so the next sync pulls everything the family wrote since the backup's cursor and the normal rules apply: records the phone had not changed take the family's copy; edits still dirty in the backup meet the family's by last writer; deletions stay; a file whose bytes are not here is fetched as usual.
 
-One case needs more: a loan that was private in the backup but shared since (by this phone, before the restore). The normal rule would answer the family's newer copy with a tombstone and delete the loan on every phone. So a restore sets `sync.restored`, and until the next complete sync a pulled row that is newer than a private copy here (loan, payment or file) is taken. Covered by `SyncRestoreTest`. Limits: a loan made private after the backup comes back as the family's tombstone (it was deleted for them); the same backup restored on two phones at once makes them one member.
+One case needs more: a loan that was private in the backup but shared since (by this phone, before the restore). The normal rule would answer the family's newer copy with a tombstone and delete the loan on every phone. So a restore sets `sync.restored`, and until the next complete sync a pulled row that is newer than a private copy here (loan, payment or file) is taken. Covered by `SyncRestoreTest`. Limits: a loan made private after the backup comes back as the family's tombstone (it was deleted for them); the same backup restored on two phones at once makes them one member (one set of credentials, one key pair).
 
-## Not in version 1
+Membership after a restore: the restored phone is the same member (same member id, relay secret and key pair), so it keeps working; keys made after the backup are in its boxes on the relay and open on the first sync (`SyncMembershipTest.aRestoredPhoneIsStillTheSameMember`). If the member was removed since, the first sync says so and forgets the family. A backup taken while a join request was waiting restores that request.
 
-- Removing a member (needs a new family key on the remaining phones).
-- Background sync and notifications.
-- Approving a join request.
+## Not in this version
+
+- Detecting a relay that hides membership changes (signed membership history).
+- Background sync (only the join-request check runs in the background).
+- Screens for membership (the next step, built on `SyncEngine`'s API): the home card for join requests, Allow / Don't allow, member rows with "Make admin", "Remove", the waiting-to-join state, the open invites list.

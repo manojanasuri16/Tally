@@ -30,6 +30,9 @@ var pendingSharedText: String? = null
 /** An invite link (tally://join#...) that opened the app, waiting for the Join screen. Null once taken. */
 var pendingInvite: String? = null
 
+/** A screen a notification asked to open ("family"), taken once the app is unlocked. Null once taken. */
+var pendingOpen: String? = null
+
 /**
  * The one activity. It loads the book (or shows the lock), applies the appearance, and stashes the ways in
  * (a shared text, an invite link) in [pendingSharedText] / [pendingInvite].
@@ -43,6 +46,8 @@ class MainActivity : FragmentActivity() {
             private set
         /** Set just before the app opens a system picker or share sheet of its own, so coming back doesn't re-lock. */
         @Volatile var holdLock = false
+        /** Intent extra: the screen to open (the join-request notification puts "family"). */
+        const val EXTRA_OPEN = "tally-open"
     }
 
     private var stoppedAt = 0L
@@ -94,6 +99,7 @@ class MainActivity : FragmentActivity() {
         intent ?: return
         val data: Uri? = intent.data
         when {
+            intent.getStringExtra(EXTRA_OPEN) == "family" -> { pendingOpen = "family"; intent.removeExtra(EXTRA_OPEN); return }
             intent.action == Intent.ACTION_VIEW && data?.scheme == "tally" && data.host == "join" -> pendingInvite = data.toString()
             intent.action == Intent.ACTION_SEND && intent.type?.startsWith("text/") == true -> {
                 val text = listOfNotNull(intent.getStringExtra(Intent.EXTRA_SUBJECT), intent.getStringExtra(Intent.EXTRA_TEXT)).joinToString("\n")
