@@ -13,6 +13,8 @@ import javax.crypto.spec.SecretKeySpec
  * PBKDF2-HMAC-SHA256 (150k rounds) over the UTF-8 bytes of what was entered, then AES-GCM-256.
  * The envelope is { enc:1, s:salt, i:iv, d:ciphertext+tag, t:type, l:pinLength }.
  */
+// The phone's lock (t: "phone") is the same envelope with a random 20-digit recovery code as the secret (data/LockRules.kt);
+// the phone's own prompt opens a Keystore-sealed copy of the derived key (ui/lock/PhoneLock.kt).
 object Crypto {
     const val LOCK_ROUNDS = 150_000
     private val random = SecureRandom()
@@ -92,6 +94,13 @@ object Crypto {
         val pt = decrypt(k, unb64(env.s("i")), unb64(env.s("d")))
         val t = env.s("t").ifEmpty { "pin" }
         Opened(k, s, t, if (t == "pin") secret.length else 0, String(pt, Charsets.UTF_8))
+    }.getOrNull()
+
+    /** Opens [env] with key bytes already known (the phone's lock opening its own earlier copy) and changes nothing; null when they do not fit. */
+    fun openEnvelopeWithKey(env: Map<String, Any?>, keyBytes: ByteArray): Opened? = runCatching {
+        val pt = decrypt(keyBytes, unb64(env.s("i")), unb64(env.s("d")))
+        val t = env.s("t").ifEmpty { "pin" }
+        Opened(keyBytes, unb64(env.s("s")), t, if (t == "pin") n(env["l"]).toInt() else 0, String(pt, Charsets.UTF_8))
     }.getOrNull()
 
     /** Makes an opened envelope's lock the current one. */
