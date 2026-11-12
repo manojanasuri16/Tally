@@ -57,8 +57,11 @@ object SyncText {
         SyncResult.JoinPending -> t("join.pending", "Asked to join. Someone in your family needs to allow it; this phone joins on its own once they do.")
         SyncResult.JoinDenied -> t("join.denied", "You were not let into the family.")
         SyncResult.Removed -> t("sync.removed", "You were removed from the family. Your loans stay on this phone.")
-        SyncResult.OldFamily -> t("sync.oldFamily", "Sharing needs setting up again. Leave the family, then start sharing or join again. Your loans stay on this phone.")
+        SyncResult.OldFamily -> oldFamilyText()
     }
+
+    /** A family made by 0.1.0/0.2.0: sharing has to be set up again. */
+    fun oldFamilyText(): String = t("sync.oldFamily", "Sharing needs to be set up again after this update. Your loans stay on this phone.")
 
     /** An invite made by 0.1.0/0.2.0. */
     fun oldCode(): String = t("join.oldCode", "This code is from an older Tally. Ask for a new one.")
@@ -67,8 +70,9 @@ object SyncText {
     class Line(val text: String, val action: Action)
     enum class Action { NONE, SET_UP, RETRY }
 
-    fun status(state: SyncState, hasFamily: Boolean, lastAt: Long, nowMs: Long, joining: Boolean = false): Line = when {
-        joining && !hasFamily -> Line(t("sync.line.joining", "Waiting to be let into the family"), Action.RETRY)
+    fun status(state: SyncState, hasFamily: Boolean, lastAt: Long, nowMs: Long, joining: Boolean = false, oldFamily: Boolean = false): Line = when {
+        oldFamily -> Line(oldFamilyText(), Action.SET_UP)
+        joining && !hasFamily -> Line(t("sync.line.joining", "Waiting for an admin to let you in"), Action.RETRY)
         !hasFamily -> Line(t("sync.line.none", "Not shared yet"), Action.SET_UP)
         state.running -> Line(t("sync.line.running", "Syncing…"), Action.NONE)
         state.last is SyncResult.Failed -> Line(t("sync.line.failed", "Couldn't sync · tap to retry"), Action.RETRY)

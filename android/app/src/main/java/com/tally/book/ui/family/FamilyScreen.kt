@@ -62,16 +62,26 @@ fun NavGraphBuilder.familyGraph() {
 @Composable
 fun FamilyScreen() {
     val rev = rememberLedger()
-    val inFamily = remember(rev) { Sync.hasFamily() }
+    val view = remember(rev) { Sync.membership() }
     var starting by remember { mutableStateOf(false) }
     var inviting by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    // an admin opening this page sees the people waiting right away
+    LaunchedEffect(view.inFamily && view.iAmAdmin) { if (view.inFamily && view.iAmAdmin) Sync.syncInBackground() }
 
     SubScreen(t("family.title", "Family")) { pad ->
         Column(
             Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(ScreenPadding),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (inFamily) InFamily(onInvite = { inviting = true }) else NoFamily(onStart = { starting = true })
+            if (view.inFamily) JoinRequestCards()
+            when {
+                view.gone != null -> GoneCard(view.gone)
+                view.oldFamily -> OldFamilyCard(onSetUp = { starting = true })
+                view.joining != null -> WaitingCard(view.joining)
+                view.inFamily -> InFamily(view, onInvite = { inviting = true })
+                else -> NoFamily(onStart = { starting = true })
+            }
             MyNameGroup()
             LanguageGroup()
             LockGroup()
@@ -80,7 +90,10 @@ fun FamilyScreen() {
             AGroup { item { ARow(t("app.version", "Version"), value = BuildConfig.VERSION_NAME) } }
         }
     }
-    if (starting) StartSheet(onDismiss = { starting = false })
+    if (starting) StartSheet(
+        initial = view.familyName.takeIf { view.oldFamily }.orEmpty(), onDismiss = { starting = false },
+        onStart = { name -> scope.launch { if (view.oldFamily) FamilyFlow.setUp(name) else FamilyFlow.create(name) } },
+    )
     if (inviting) InviteSheet(onDismiss = { inviting = false })
 }
 
@@ -101,14 +114,13 @@ private fun NoFamily(onStart: () -> Unit) {
 }
 
 @Composable
-private fun StartSheet(onDismiss: () -> Unit) {
-    val scope = rememberCoroutineScope()
-    // no default: whoever starts the family types its one name, and everyone who joins sees that same name
-    var name by remember { mutableStateOf("") }
+private fun StartSheet(initial: String, onDismiss: () -> Unit, onStart: (String) -> Unit) {
+    // no default for a new family: whoever starts it types its one name, and everyone who joins sees that same name
+    var name by remember { mutableStateOf(initial) }
     val clean = Invite.cleanName(name)
     EditSheet(
         t("family.name.ask", "Give your family a name"), onDismiss,
-        onSave = { onDismiss(); scope.launch { FamilyFlow.create(clean ?: return@launch) } },
+        onSave = { clean?.let { onDismiss(); onStart(it) } },
         saveLabel = t("family.name.ok", "Start"), saveEnabled = clean != null,
     ) {
         TextInput(
@@ -116,94 +128,6 @@ private fun StartSheet(onDismiss: () -> Unit) {
             placeholder = t("family.name.placeholder", "e.g. Example family"),
             supporting = t("family.name.help", "Your family will see this name when they join."),
         )
-    }
-}
-
-// ---------- in a family ----------
-
-@Composable
-private fun InFamily(onInvite: () -> Unit) {
-    val scope = rememberCoroutineScope()
-    val state by Sync.engine.state.collectAsStateWithLifecycle()
-    val rev = rememberLedger()
-    val familyName = remember(rev) { DB.o("family")?.s("name").orEmpty() }
-    // the relay's list of who is in the family (removed and departed members are not), me first
-    val members = remember(rev) { Sync.membership().members.sortedByDescending { it.me } }
-    val lastAt = remember(rev, state) { Sync.lastSyncedAt() }
-    val now = Clock.millis()
-
-    AGroup(title = familyName, footer = t("family.safe", "Only your family can read what you share.")) {
-        members.forEach { m ->
-            val mine = m.me
-            val joined = m.since.takeIf { it > 0 }?.let { fmtISODate(SyncText.isoDate(it)) }
-            item {
-                ARow(
-                    m.name.ifBlank { memberName(m.id) },
-                    sub = joined?.let { t("family.joined", "joined {date}", "date" to it) },
-                    value = if (mine) t("family.you", "You") else null,
-                    icon = Icons.Rounded.Person, tint = if (mine) Apple.colors.accent else Apple.colors.secondaryLabel,
-                )
-            }
-        }
-    }
-    AGroup {
-        item { ARow(t("family.invite", "Invite someone"), icon = Icons.Rounded.PersonAdd, chevron = true, onClick = onInvite) }
-        item {
-            ARow(
-                t("family.syncNow", "Sync now"),
-                sub = if (lastAt > 0) t("family.lastSync", "Last synced {when}", "when" to SyncText.ago(lastAt, maxOf(now, lastAt))) else t("family.neverSynced", "Not synced yet"),
-                icon = Icons.Rounded.Sync, onClick = { if (!state.running) scope.launch { FamilyFlow.syncNow() } },
-                trailing = if (state.running) ({ CircularProgressIndicator(Modifier.size(20.dp), color = Apple.colors.accent, strokeWidth = 2.dp) }) else null,
-            )
-        }
-    }
-    AGroup {
-        item {
-            ARow(
-                t("family.leave", "Leave family"), icon = Icons.AutoMirrored.Rounded.ExitToApp, tint = LocalSemantic.current.negative,
-                titleColor = LocalSemantic.current.negative, onClick = { scope.launch { FamilyFlow.leave() } },
-            )
-        }
-    }
-}
-
-@Composable
-private fun InviteSheet(onDismiss: () -> Unit) {
-    val ctx = LocalContext.current
-    // a fresh one-time invite is made each time the sheet opens; its text exists only here, while the sheet is open
-    var invite by remember { mutableStateOf<String?>(null) }
-    var problem by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) {
-        when (val r = Sync.detached { Sync.engine.newInvite() }) {
-            is InviteResult.Made -> invite = r.text
-            is InviteResult.Failed -> problem = SyncText.message(r.result) ?: t("invite.none", "There is nothing to share yet.")
-        }
-    }
-    EditSheet(t("invite.title", "Invite someone"), onDismiss, onSave = null) {
-        if (invite == null) {
-            if (problem == null) CircularProgressIndicator(color = Apple.colors.accent, strokeWidth = 3.dp)
-            else Text(problem!!, style = Apple.type.body, color = Apple.colors.secondaryLabel)
-            return@EditSheet
-        }
-        val invite = invite!!
-        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            QrCode(invite, size = 240.dp)
-            Text(
-                t("invite.help", "Ask them to open Tally → Family → Join, and scan this."),
-                style = Apple.type.body, color = Apple.colors.label, textAlign = TextAlign.Center,
-            )
-            PrimaryButton(t("invite.share", "Share"), {
-                val text = t("invite.message", "Join our family in Tally:") + "\n" + invite
-                val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
-                MainActivity.holdLock = true      // coming back from the share sheet must not lock the app
-                runCatching { ctx.startActivity(Intent.createChooser(send, t("invite.share", "Share"))) }
-                    .onFailure { MainActivity.holdLock = false }
-            }, Modifier.fillMaxWidth(), )
-            Text(
-                t("invite.warn2", "This code works once, for 24 hours. A family admin still has to allow whoever uses it."),
-                style = Apple.type.callout, color = LocalSemantic.current.warning, textAlign = TextAlign.Center,
-            )
-        }
     }
 }
 

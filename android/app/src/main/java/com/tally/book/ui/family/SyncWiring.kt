@@ -17,6 +17,7 @@ import com.tally.book.ui.components.Dialogs
 import com.tally.book.ui.components.pressDim
 import com.tally.book.ui.components.rememberLedger
 import com.tally.book.ui.loans.backupLine
+import com.tally.book.ui.loans.joinRequestsCard
 import com.tally.book.ui.loans.restorePicker
 import com.tally.book.ui.loans.syncHook
 import com.tally.book.ui.loans.syncStatusLine
@@ -30,6 +31,7 @@ import kotlinx.coroutines.delay
 fun installSyncHooks() {
     syncHook = { pullToRefresh() }
     syncStatusLine = { SyncStatusLine() }
+    joinRequestsCard = { JoinRequestCards() }
     backupLine = { BackupHomeLine() }
     restorePicker = { rememberRestorePicker() }
 }
@@ -47,12 +49,13 @@ suspend fun pullToRefresh() {
 fun SyncStatusLine() {
     val state by Sync.engine.state.collectAsStateWithLifecycle()
     val rev = rememberLedger()
-    val has = remember(rev) { Sync.hasFamily() }
-    val joining = remember(rev) { Sync.isJoining() }
+    val view = remember(rev) { Sync.membership() }
+    val has = view.inFamily
+    val joining = view.joining != null
     val lastAt = remember(rev, state) { Sync.lastSyncedAt() }
     var now by remember { mutableLongStateOf(Clock.millis()) }
     LaunchedEffect(Unit) { while (true) { delay(30_000); now = Clock.millis() } }
-    val line = SyncText.status(state, has, lastAt, maxOf(now, lastAt), joining)
+    val line = SyncText.status(state, has, lastAt, maxOf(now, lastAt), joining, view.oldFamily)
     val tap: (() -> Unit)? = when (line.action) {
         SyncText.Action.SET_UP -> ({ FamilyFlow.openFamily() })
         SyncText.Action.RETRY -> ({ Sync.syncInBackground() })

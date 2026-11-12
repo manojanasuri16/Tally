@@ -48,7 +48,7 @@ android/app/src/main/java/com/tally/book/
                Membership (pure: keyring, key boxes, requests, invite boxes, MembershipView), SyncModel (pure merge/push rules),
                SyncEngine (sync + create/join/approve/remove/roles/leave), Sync (app wiring), Notices (join-request check, WorkManager + notification)
   ui/          App.kt (Routes, AppNav, shell, SubScreen), theme/, components/ (the kit + Qr + PullRefresh), lock/,
-               family/ (FamilyScreen + Join + familyGraph, QrScanner + QrDecoder (CameraX + ZXing), FamilyFlow (create/join/leave, "please wait"), BackupFlow (Backup group, restore/undo flow, BackupText, home "stopped" line),
+               family/ (FamilyScreen + Join + familyGraph, FamilyMembers (members, member sheet, invite sheet), FamilyStates (waiting, removed/denied, old family), JoinRequests (the Allow / Don't allow cards), MemberText (pure: member actions, leave/remove/request words), QrScanner + QrDecoder (CameraX + ZXing), FamilyFlow (create/join/leave, "please wait"), BackupFlow (Backup group, restore/undo flow, BackupText, home "stopped" line),
                SyncWiring (pull to refresh + status line), SyncText (pure words for sync: ago, errors, status), NoticePermission (the Android 13+ notification permission hook)),
                loans/ (LoansScreen + Welcome + loansGraph, LoanDetail, LoanSheet, PaymentSheet, Attachments (photos, documents, FileStore glue),
                FormBits, Words (plain words, and `loanWords(given)`: the one place wording turns around for money I gave), SyncHooks (syncHook, syncStatusLine))

@@ -148,13 +148,15 @@ fun LoansScreen() {
                     Modifier.fillMaxSize().pullRefreshContent(pull).verticalScroll(rememberScrollState()).padding(ScreenPadding),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
+                    joinRequestsCard?.invoke()
                     if (!home.any) {
                         EmptyState(t("home.empty", "No loans yet. Add one to start keeping track."), icon = Icons.Rounded.Group)
+                        syncStatusLine?.let { line -> Box(Modifier.padding(start = 4.dp)) { line() } }
                         backupLine?.invoke()
                     } else {
                         HomeHero(home)
                         if (home.hasTaken) DueSection(home.due, onPay = { id, k -> payFor = PayFor(id, k) }, onOpen = { openLoan(it) })
-                        if (home.hasGiven) DueSection(home.expected, onPay = { id, k -> payFor = PayFor(id, k) }, onOpen = { openLoan(it) }, given = true)
+                        if (home.hasGiven && home.expected.isNotEmpty()) DueSection(home.expected, onPay = { id, k -> payFor = PayFor(id, k) }, onOpen = { openLoan(it) }, given = true)
                         home.groups.forEach { (kind, list) -> LoanGroup(kindLabel(kind), list, home.owed, home.showAdder) }
                         if (home.given.isNotEmpty()) LoanGroup(t("home.gave", "Money I gave"), home.given, home.owed, home.showAdder)
                         if (home.priv.loans.isNotEmpty()) PrivateGroup(home.priv, home.owed)

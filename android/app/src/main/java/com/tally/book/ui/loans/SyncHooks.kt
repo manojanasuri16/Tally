@@ -16,6 +16,9 @@ var syncHook: (suspend () -> Unit)? = null
 /** A small line shown under the figure on the home screen ("Synced just now"). Backed by state, so setting it redraws the screen. */
 var syncStatusLine: (@Composable () -> Unit)? by mutableStateOf(null)
 
+/** Cards at the top of the home screen: people asking to join the family, for an admin ("Asha wants to join… Allow / Don't allow"); draws nothing when there are none. */
+var joinRequestsCard: (@Composable () -> Unit)? by mutableStateOf(null)
+
 /** A quiet line on the home screen when daily backup has stopped ("Backup stopped: choose the folder again"); draws nothing otherwise. */
 var backupLine: (@Composable () -> Unit)? by mutableStateOf(null)
 
