@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.Base64
 
@@ -147,6 +148,12 @@ class SyncEngine(
         } finally { lock.unlock() }
     }
 
+    /** Runs [block] (a restore replacing the book) once no sync, create, join or leave is running, and with none starting meanwhile. */
+    suspend fun <T> paused(block: suspend () -> T): T = lock.withLock { block() }
+
+    /** Forgets how the last sync ended (the book it was about has been replaced). */
+    fun resetState() { _state.value = SyncState() }
+
     // ---------- one refresh ----------
 
     /** One refresh. Returns [SyncResult.Busy] at once if another is running. */
@@ -241,7 +248,11 @@ class SyncEngine(
             when (download(fam, w)) { 1 -> filesDown++; -1 -> skipped++ }
         }
 
-        book.edit { db -> checkFamily(db, fam); SyncModel.syncOf(db)["lastAt"] = Clock.millis().toDouble() }
+        book.edit { db ->
+            checkFamily(db, fam)
+            SyncModel.syncOf(db)["lastAt"] = Clock.millis().toDouble()
+            SyncModel.syncOf(db).remove("restored")      // a restored book has caught up with everything on the relay
+        }
         return SyncResult.Done(pulled, pushed, filesUp, filesDown, skipped)
     }
 

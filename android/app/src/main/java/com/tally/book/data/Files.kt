@@ -29,6 +29,14 @@ object FileStore {
 
     private var dir: File? = null
     fun init(ctx: Context) { dir = File(ctx.filesDir, "files").apply { mkdirs() } }
+    /** The folder the records live in (a backup copies it, a restore replaces it). */
+    val directory: File? get() = dir
+
+    /**
+     * Held while one record's two files are written, read or removed, and while a backup copies a record, so a backup never
+     * copies a half-written file (AtomicFile on Android 10 rewrites in place). Never held across a suspension.
+     */
+    val io = Any()
 
     private fun safe(id: String) = id.replace(Regex("[^A-Za-z0-9_-]"), "_")
     private fun binOf(id: String) = File(dir, safe(id) + ".bin")
@@ -48,24 +56,28 @@ object FileStore {
         val m = metaOf(id); val b = binOf(id)
         if (!m.exists() || !b.exists()) return@withContext null
         runCatching {
-            val j = JsonCodec.parseObj(m.readText())
-            Rec(id, j.b("enc"), j.s("iv").takeIf { it.isNotEmpty() }?.let { Crypto.unb64(it) }, AtomicFile(b).readFully(), n(j["ts"]).toLong(), j.s("mime"))
+            synchronized(io) {
+                val j = JsonCodec.parseObj(m.readText())
+                Rec(id, j.b("enc"), j.s("iv").takeIf { it.isNotEmpty() }?.let { Crypto.unb64(it) }, AtomicFile(b).readFully(), n(j["ts"]).toLong(), j.s("mime"))
+            }
         }.getOrNull()
     }
 
     suspend fun fileRecPut(r: Rec) = withContext(Dispatchers.IO) {
         val d = dir ?: throw Fail("failed")
-        d.mkdirs()
-        val af = AtomicFile(binOf(r.id))
-        val s = af.startWrite()
-        try { s.write(r.data); af.finishWrite(s) } catch (e: Throwable) { af.failWrite(s); throw e }
         val meta = obj("id" to r.id, "enc" to if (r.enc) 1 else 0, "iv" to (r.iv?.let { Crypto.b64(it) } ?: ""), "ts" to r.ts.toDouble(), "mime" to r.mime, "size" to r.data.size)
-        val am = AtomicFile(metaOf(r.id))
-        val s2 = am.startWrite()
-        try { s2.write(JsonCodec.stringify(meta).toByteArray()); am.finishWrite(s2) } catch (e: Throwable) { am.failWrite(s2); throw e }
+        synchronized(io) {
+            d.mkdirs()
+            val af = AtomicFile(binOf(r.id))
+            val s = af.startWrite()
+            try { s.write(r.data); af.finishWrite(s) } catch (e: Throwable) { af.failWrite(s); throw e }
+            val am = AtomicFile(metaOf(r.id))
+            val s2 = am.startWrite()
+            try { s2.write(JsonCodec.stringify(meta).toByteArray()); am.finishWrite(s2) } catch (e: Throwable) { am.failWrite(s2); throw e }
+        }
     }
 
-    suspend fun fileRecDel(id: String) = withContext(Dispatchers.IO) { binOf(id).delete(); metaOf(id).delete(); Unit }
+    suspend fun fileRecDel(id: String) = withContext(Dispatchers.IO) { synchronized(io) { binOf(id).delete(); metaOf(id).delete() }; Unit }
 
     /** Size of a stored record without reading it (health scan). */
     private suspend fun fileRecSize(id: String): Pair<Long, Long> = withContext(Dispatchers.IO) {
@@ -75,8 +87,14 @@ object FileStore {
 
     /** a restore replaces the whole set, and Erase removes it */
     suspend fun clearAllFileRecords() = filesExclusive {
-        withContext(Dispatchers.IO) { dir?.listFiles()?.forEach { it.delete() } }
+        withContext(Dispatchers.IO) { synchronized(io) { dir?.listFiles()?.forEach { it.delete() } } }
         fileStates.clear()
+    }
+
+    /** After a restore put another set of files in place: forget what this session checked, and check the lock pass afresh. */
+    fun afterRestore() {
+        fileStates.clear(); verifyQueue.clear(); sweptFor = null
+        dir?.mkdirs()
     }
 
     // ---------- hashing ----------

@@ -82,6 +82,21 @@ object Crypto {
         return JsonCodec.parse(String(pt, Charsets.UTF_8))
     }
 
+    /** An envelope opened with a secret, without making its lock the current one (a backup being restored). */
+    class Opened(val key: ByteArray, val salt: ByteArray, val type: String, val pinLen: Int, val text: String)
+
+    /** Opens [env] with [secret] and changes nothing; null on a wrong secret or a damaged envelope. */
+    fun openEnvelope(env: Map<String, Any?>, secret: String): Opened? = runCatching {
+        val s = unb64(env.s("s"))
+        val k = deriveKeyBits(secret, s)
+        val pt = decrypt(k, unb64(env.s("i")), unb64(env.s("d")))
+        val t = env.s("t").ifEmpty { "pin" }
+        Opened(k, s, t, if (t == "pin") secret.length else 0, String(pt, Charsets.UTF_8))
+    }.getOrNull()
+
+    /** Makes an opened envelope's lock the current one. */
+    fun adopt(o: Opened) { key = o.key; salt = o.salt; type = o.type; pinLen = o.pinLen }
+
     /** Sets a new lock (or changes it). The next save seals with it. */
     fun setLock(secret: String, kind: String) {
         val s = randomBytes(16)

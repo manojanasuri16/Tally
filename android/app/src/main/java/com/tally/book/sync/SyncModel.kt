@@ -11,7 +11,7 @@ import com.tally.book.core.*
  * files, members). It is kept outside the record because loans and payments use their own "kind" field for something
  * else (bank/hand/gold, emi/interest/principal).
  *
- * Book fields this file owns: DB.sync = { cursor, lastAt, dirty: {id: true}, blobsUp: {id: true}, pushed: {id: true} }.
+ * Book fields this file owns: DB.sync = { cursor, lastAt, dirty: {id: true}, blobsUp: {id: true}, pushed: {id: true}, restored? }.
  *   pushed: ids the relay is known to hold (pushed by this phone, or pulled from it). A private record whose id is in
  *   pushed is sent as a bare tombstone so the copy on the relay is overwritten; one that is not is never sent at all.
  *
@@ -19,6 +19,12 @@ import com.tally.book.core.*
  * private loan, or a payment or file whose loan is private; an owner that cannot be found counts as private (fail
  * closed) when deciding what to push. A record that is private on this phone is never replaced by a pulled row: if someone else's edit of it
  * arrives, it is ignored and the record is marked dirty, so this phone's tombstone goes back up and wins on the relay.
+ *
+ * After a restore (sync.restored, set by markRestored, cleared at the end of the next complete sync) the book is older than
+ * what this phone already told the family: a loan that was private in the backup may have been shared since (by this very
+ * phone, before the restore). Then a pulled row that is newer than the private copy here is the family's current state and
+ * is taken, instead of being answered with a tombstone that would delete the family's newer loan. Rows that are not newer
+ * are treated as always.
  */
 object SyncModel {
     /** Wire kind -> the DB list that holds it. */
@@ -32,6 +38,10 @@ object SyncModel {
     fun pushed(db: Obj): Obj = syncOf(db).oo("pushed")
     fun blobsUp(db: Obj): Obj = syncOf(db).oo("blobsUp")
     fun cursor(db: Obj): Long = db.o("sync").num("cursor").toLong()
+
+    /** Marks a book that was just restored from a backup (only one in a family has anything to catch up with). */
+    fun markRestored(db: Obj) { if (db.o("family") != null) syncOf(db)["restored"] = true }
+    fun restored(db: Obj): Boolean = db.o("sync").b("restored")
 
     class Found(val kind: String, val list: Arr, val index: Int, val rec: Obj)
 
@@ -133,7 +143,8 @@ object SyncModel {
     /**
      * Merges pulled records into [db] (step 1 of "One refresh"):
      * - not in the book -> added;
-     * - private on this phone -> left alone; if the row is not a tombstone, re-marked dirty so the tombstone goes back up;
+     * - private on this phone -> left alone; if the row is not a tombstone, re-marked dirty so the tombstone goes back up
+     *   (after a restore, a row newer than the private copy is taken instead, as below);
      * - not dirty -> the remote record replaces it;
      * - dirty -> last writer wins (updatedAt, then updatedBy); if remote wins, the dirty mark is cleared.
      * Local-only fields of the local copy are kept. Every pulled id is marked as held by the relay.
@@ -142,6 +153,7 @@ object SyncModel {
         var taken = 0; var kept = 0; var ignored = 0
         val removed = ArrayList<String>()
         val d = dirty(db); val p = pushed(db)
+        val restoring = restored(db)
         for (w in records) {
             val listKey = LISTS[w.kind]
             val id = w.rec["id"] as? String
@@ -153,7 +165,7 @@ object SyncModel {
                 db.aa(listKey).add(incoming); taken++; continue
             }
             if (local.kind != w.kind) { ignored++; continue }
-            if (isPrivate(db, local.kind, local.rec, unknown = false)) {
+            if (isPrivate(db, local.kind, local.rec, unknown = false) && !(restoring && remoteWins(incoming, local.rec))) {
                 if (!incoming.b("deleted")) d[id] = true
                 ignored++; continue
             }
