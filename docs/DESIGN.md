@@ -14,7 +14,7 @@ It is a sibling of Balance (`~/Balance/android`, package `com.balance.ledger`) a
   - `hand`: money borrowed from a person (or, with `direction: "given"`, money lent to one). Only interest is paid (monthly or yearly), or none at all; the principal stays owed until it is returned, all at once or in parts.
   - `gold`: a gold loan. Interest is paid once a year; principal is repaid on closure.
 - Log a payment against a loan: amount, date, what it was for (EMI, interest, principal), and optionally a note, a pasted bank SMS, and photos or documents.
-- Keep each loan's documents.
+- Keep each loan's documents, added when the loan is made or later on its screen.
 - Family sync: pull down to refresh. Every loan and payment shows who entered it. Admins let people in (one-time invites, approved by an admin), can remove members (the family's key is then replaced), and make others admins.
 - A loan is shared by default. A private loan, its payments and its files never leave the phone, except inside a backup file the person makes.
 - Backups: once a day into a folder on the phone (the newest 14 kept), Back up now through the share sheet, and Restore on a new phone.

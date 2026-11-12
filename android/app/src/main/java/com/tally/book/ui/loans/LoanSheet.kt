@@ -48,14 +48,18 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
     var dueDayTouched by remember { mutableStateOf(editing) }
     var interest by remember { mutableStateOf(existing?.takeIf { it.s("kind") == "hand" }?.let { interestChoice(it.num("rate"), it.s("rateUnit")) } ?: "month") }
     var repayBy by remember { mutableStateOf(existing?.s("repayBy").orEmpty()) }
-    var showDetails by remember { mutableStateOf(editing && (existing?.s("note").orEmpty().isNotBlank() || existing?.s("repayBy").orEmpty().isNotBlank())) }
+    val saved = remember { existing?.let { filesOf("loan", it.s("id")) } ?: emptyList() }
+    var showDetails by remember { mutableStateOf(editing && (existing?.s("note").orEmpty().isNotBlank() || existing?.s("repayBy").orEmpty().isNotBlank() || saved.isNotEmpty())) }
     var every by remember { mutableStateOf(existing?.s("interestEvery")?.takeIf { it == "month" || it == "year" }) }
     var grams by remember { mutableStateOf(existing?.let { editText(it.num("grams")) }.orEmpty()) }
     var note by remember { mutableStateOf(existing?.s("note").orEmpty()) }
     var keepPrivate by remember { mutableStateOf(existing?.b("private") ?: false) }
+    val pending = remember { mutableStateListOf<Picked>() }
+    val removed = remember { mutableStateListOf<String>() }
     var error by remember { mutableStateOf<String?>(null) }
     var errorStamp by remember { mutableIntStateOf(0) }
 
+    val pickers = rememberAttachPickers { p -> pending.add(p); showDetails = true }
     val words = loanWords(given)
     val effEvery = every ?: if (kind == "gold") "year" else "month"
 
@@ -92,6 +96,8 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
         if (problem != null) { error = problem; errorStamp++; return }
         var id = ""
         Ledger.edit { id = saveLoan(draft).s("id") }
+        removeStored(removed.toList())
+        storeAll("loan", id, pending.toList())
         onSaved(id)
     }
 
@@ -154,6 +160,9 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
             } else {
                 if (kind == "hand") DateField(repayBy, { repayBy = it; error = null }, t("loan.repayBy.label", "To be returned by (optional)"), clearable = true)
                 TextInput(note, { note = it }, t("loan.note", "Note"), singleLine = false, supporting = t("common.optional", "Optional"))
+                FieldTitle(t("doc.title", "Documents"))
+                AttachedList(saved, removed, pending)
+                InsetSurface { AttachButtons(pickers) }
             }
             InsetSurface {
                 SwitchRow(

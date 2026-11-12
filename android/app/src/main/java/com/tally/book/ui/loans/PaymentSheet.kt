@@ -66,8 +66,6 @@ fun PaymentSheet(loanId: String, existing: Obj?, sms: String? = null, startKind:
     var error by remember { mutableStateOf<String?>(null) }
     var errorStamp by remember { mutableIntStateOf(0) }
     val clipboard = LocalClipboardManager.current
-    val scope = rememberCoroutineScope()
-    val ctx = LocalContext.current
     val pickers = rememberAttachPickers { p -> pending.add(p); showDetails = true }
 
     fun save() {
@@ -113,24 +111,7 @@ fun PaymentSheet(loanId: String, existing: Obj?, sms: String? = null, startKind:
                 else message = text
             }, Modifier.align(Alignment.Start), icon = Icons.Rounded.ContentPaste)
 
-            val shown = saved.filter { it.s("id") !in removed }
-            if (shown.isNotEmpty() || pending.isNotEmpty()) {
-                InsetSurface {
-                    shown.forEachIndexed { i, f ->
-                        if (i > 0) Hairline(start = 16.dp)
-                        // A saved file opens on a tap (fetching it first when a family member added it), so a receipt can be looked at again.
-                        val sub = if (FileFetch.isBusy(f.s("id"))) t("doc.getting", "Getting the file…") else fileSizeLabel(f.num("size"))
-                        AttachedRow(f.s("name"), sub, isImage = fileFamily(f) == "image", thumb = null, onRemove = { removed.add(f.s("id")) },
-                            onOpen = { scope.launch { openStoredFile(ctx, f) } })
-                    }
-                    pending.toList().forEachIndexed { i, p ->
-                        if (i > 0 || shown.isNotEmpty()) Hairline(start = 16.dp)
-                        var thumb by remember(p.key) { mutableStateOf<ImageBitmap?>(null) }
-                        LaunchedEffect(p.key) { if (p.photo) thumb = withContext(Dispatchers.Default) { PhotoCodec.thumb(p.bytes) } }
-                        AttachedRow(p.name, fileSizeLabel(p.bytes.size.toDouble()), isImage = p.photo, thumb = thumb, onRemove = { pending.remove(p) })
-                    }
-                }
-            }
+            AttachedList(saved, removed, pending)
             InsetSurface { AttachButtons(pickers) }
         }
         FormError(error, errorStamp)
@@ -145,6 +126,33 @@ private fun offerClose(loanId: String, message: String) {
     askScope.launch {
         if (Dialogs.ask(message, t("loan.close", "Close this loan")))
             Ledger.edit { closeLoan(loanId, todayISO()) }
+    }
+}
+
+/**
+ * The files a form holds before Save: the ones already saved (minus those marked in [removed]; a tap opens one) and the [pending] ones
+ * picked now. Taking either off only changes the form's lists; nothing is stored or deleted until Save.
+ */
+@Composable
+fun AttachedList(saved: List<Obj>, removed: MutableList<String>, pending: MutableList<Picked>) {
+    val scope = rememberCoroutineScope()
+    val ctx = LocalContext.current
+    val shown = saved.filter { it.s("id") !in removed }
+    if (shown.isEmpty() && pending.isEmpty()) return
+    InsetSurface {
+        shown.forEachIndexed { i, f ->
+            if (i > 0) Hairline(start = 16.dp)
+            // A saved file opens on a tap (fetching it first when a family member added it), so a receipt can be looked at again.
+            val sub = if (FileFetch.isBusy(f.s("id"))) t("doc.getting", "Getting the file…") else fileSizeLabel(f.num("size"))
+            AttachedRow(f.s("name"), sub, isImage = fileFamily(f) == "image", thumb = null, onRemove = { removed.add(f.s("id")) },
+                onOpen = { scope.launch { openStoredFile(ctx, f) } })
+        }
+        pending.toList().forEachIndexed { i, p ->
+            if (i > 0 || shown.isNotEmpty()) Hairline(start = 16.dp)
+            var thumb by remember(p.key) { mutableStateOf<ImageBitmap?>(null) }
+            LaunchedEffect(p.key) { if (p.photo) thumb = withContext(Dispatchers.Default) { PhotoCodec.thumb(p.bytes) } }
+            AttachedRow(p.name, fileSizeLabel(p.bytes.size.toDouble()), isImage = p.photo, thumb = thumb, onRemove = { pending.remove(p) })
+        }
     }
 }
 
