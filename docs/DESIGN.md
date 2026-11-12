@@ -370,6 +370,12 @@ Without a lock the file is plain and contains the family's keys and this member'
 - A folder that is gone or no longer allowed sets "stopped": the Backup group and a quiet line on the home screen say "Backup stopped: choose the folder again". Another failure shows "It did not work last time" and tries again next time.
 - "Back up now" saves into the folder (when one is chosen), makes the file in the app's cache and, after one question, opens the share sheet (Drive, WhatsApp, email). The cache copy is deleted at the next start.
 
+### Send a copy off the phone (monthly reminder)
+
+The daily backups sit in a folder on the phone, so a lost phone loses them too. `data/BackupReminder.kt` keeps, in `DevicePrefs` only (`tally-backup-sent`, `tally-backup-snooze`, `tally-first-use`; never in the book or a backup), when a backup last left the phone. The home screen shows a quiet card under the figures ("Send a copy of your backup somewhere safe, like Google Drive or WhatsApp to yourself." with Send now and Not now) when that was more than 30 days ago, or never once the book has a loan and the app has been used for 7 days; Not now hides it for 7 days; Send now runs Back up now. The Backup group has a "Last sent off this phone" line (date or Never) that is also the way in while the reminder is due. The rule is the pure `BackupReminder.due`. No notification: it shows only inside the app. The no-lock warning stays in the share question, not on the card. The card stacks its buttons in Easy mode and at large text.
+
+How "sent" is detected, and its limit: the share sheet is opened with a chooser `IntentSender`; when the person picks an app Android reports it and the copy counts as sent (the app picked is not kept). Some phones' choosers do not report; then, if the app comes back to the front at least 8 seconds after the sheet opened, it counts. Android never confirms that the target finished, so a person who picks an app and then cancels inside it is still counted, and one who closes the sheet quickly (under 8 seconds) is not.
+
 ### Restore
 
 From the Family page ("Restore from a backup") or the welcome screen ("I have a backup"):

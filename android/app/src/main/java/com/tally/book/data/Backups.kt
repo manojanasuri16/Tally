@@ -61,6 +61,7 @@ object Backups {
     /** Called first thing at start, before the book or the files are read: finishes or tidies a restore that was cut short. */
     fun init(ctx: Context) {
         app = ctx.applicationContext
+        BackupReminder.noteFirstUse()
         runCatching { BackupCore.recover(place()) }
         runCatching { File(app.cacheDir, "backup").deleteRecursively(); File(app.cacheDir, "restore-in").deleteRecursively() }
         refresh()

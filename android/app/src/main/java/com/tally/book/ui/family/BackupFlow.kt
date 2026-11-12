@@ -1,7 +1,10 @@
 package com.tally.book.ui.family
 
 import android.content.ClipData
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.IntentFilter
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -16,6 +19,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.tally.book.MainActivity
 import com.tally.book.core.*
@@ -31,7 +37,9 @@ import com.tally.book.ui.lock.LockModes
 import com.tally.book.ui.lock.PhoneLock
 import com.tally.book.ui.lock.typeNoun
 import com.tally.book.ui.theme.Apple
+import com.tally.book.ui.theme.LocalEasy
 import com.tally.book.ui.theme.LocalSemantic
+import com.tally.book.ui.theme.bigText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -84,6 +92,8 @@ object BackupText {
 
     fun undoQuestion(date: String): String =
         t("backup.undo.ask", "Undo the last restore?\n\nThis puts back what was on this phone before it, as it was on {date}.", "date" to fmtISODate(date))
+
+    fun sendReminder(): String = t("backup.sendReminder", "Send a copy of your backup somewhere safe, like Google Drive or WhatsApp to yourself.")
 
     fun noLockWarning(): String = t("backup.noLock", "Without an app lock, anyone who gets this file can read your loans and join your family.")
 }
@@ -204,13 +214,30 @@ object BackupFlow {
         share(ctx, file)
     }
 
+    /** Sent when the chooser reports the app the person picked (not every phone's chooser does; see [BackupReminder.onReturn]). */
+    private class ChosenReceiver : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) { BackupReminder.sent() }
+    }
+    private var chosen: BroadcastReceiver? = null
+
     private fun share(ctx: Context, file: File) {
         val uri = runCatching { FileProvider.getUriForFile(ctx, ctx.packageName + ".files", file) }.getOrNull() ?: return
         val send = Intent(Intent.ACTION_SEND).setType("application/octet-stream")
             .putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         send.clipData = ClipData.newRawUri(file.name, uri)
         MainActivity.holdLock = true      // coming back from the share sheet must not lock the app
-        runCatching { ctx.startActivity(Intent.createChooser(send, t("backup.send", "Send"))) }.onFailure { MainActivity.holdLock = false }
+        // the chooser tells us which app was picked: that is the moment the copy leaves the phone (no target name is kept)
+        val app = ctx.applicationContext
+        val action = app.packageName + ".BACKUP_SENT"
+        val sender = runCatching {
+            chosen?.let { r -> runCatching { app.unregisterReceiver(r) } }
+            val r = ChosenReceiver().also { chosen = it }
+            ContextCompat.registerReceiver(app, r, IntentFilter(action), ContextCompat.RECEIVER_NOT_EXPORTED)
+            PendingIntent.getBroadcast(app, 0, Intent(action).setPackage(app.packageName), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE).intentSender
+        }.getOrNull()
+        val chooser = if (sender != null) Intent.createChooser(send, t("backup.send", "Send"), sender) else Intent.createChooser(send, t("backup.send", "Send"))
+        BackupReminder.opened()
+        runCatching { ctx.startActivity(chooser) }.onFailure { MainActivity.holdLock = false }
     }
 }
 
@@ -251,6 +278,7 @@ fun BackupGroup() {
     val chooseFolder = rememberFolderPicker()
     val restore = rememberRestorePicker()
     val warn = LocalSemantic.current.warning
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { BackupReminder.onReturn() }
     AGroup(
         title = t("backup.title", "Backup"),
         footer = when {
@@ -275,6 +303,16 @@ fun BackupGroup() {
                 sub = if (st.failed) t("backup.failedOnce", "It did not work last time. Tally will try again.") else null,
             )
         }
+        item {
+            val due = remember(rev, BackupReminder.tick.intValue) { BackupReminder.isDue(DB.objs("loans").any { !it.b("deleted") }) }
+            val sent = BackupReminder.lastSentAt()
+            ARow(
+                t("backup.sentOff", "Last sent off this phone"),
+                value = if (sent > 0) fmtISODate(java.time.Instant.ofEpochMilli(sent).atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString()) else t("backup.never", "Never"),
+                icon = Icons.Rounded.Send, sub = if (due) BackupText.sendReminder() else null,
+                onClick = if (due) ({ scope.launch { BackupFlow.backUpNow(ctx) } }) else null,
+            )
+        }
         item { ARow(t("backup.now", "Back up now"), icon = Icons.Rounded.Save, onClick = { scope.launch { BackupFlow.backUpNow(ctx) } }) }
         item { ARow(t("backup.restore", "Restore from a backup"), icon = Icons.Rounded.Restore, chevron = true, onClick = restore) }
         if (st.canUndo) item { ARow(t("backup.undo", "Undo the last restore"), icon = Icons.AutoMirrored.Rounded.Undo, onClick = { scope.launch { BackupFlow.undoLast() } }) }
@@ -284,6 +322,7 @@ fun BackupGroup() {
 /** The quiet line on the home screen, only when daily backup has stopped. Tapping it opens the Family page. */
 @Composable
 fun BackupHomeLine() {
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { BackupReminder.onReturn() }
     val st = Backups.status.value
     if (!st.stopped) return
     Box(
@@ -291,5 +330,30 @@ fun BackupHomeLine() {
         contentAlignment = Alignment.CenterStart,
     ) {
         Text(t("backup.stopped", "Backup stopped: choose the folder again"), style = Apple.type.footnote, color = LocalSemantic.current.warning)
+    }
+}
+
+/** The quiet card on the home screen when no backup has left the phone for a month. Nothing outside the app ever shows it. */
+@Composable
+fun BackupReminderCard() {
+    val rev = rememberLedger()
+    val tick = BackupReminder.tick.intValue
+    val show = remember(rev, tick) { BackupReminder.isDue(DB.objs("loans").any { !it.b("deleted") }) }
+    if (!show) return
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val stacked = bigText() || LocalEasy.current
+    SectionCard(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)) {
+        Text(BackupText.sendReminder(), style = Apple.type.subheadline, color = Apple.colors.label)
+        Spacer(Modifier.height(10.dp))
+        val send = t("backup.sendNow", "Send now")
+        val later = t("backup.notNow", "Not now")
+        if (stacked) Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            PrimaryButton(send, { scope.launch { BackupFlow.backUpNow(ctx) } }, Modifier.fillMaxWidth())
+            SecondaryButton(later, { BackupReminder.snooze() }, Modifier.fillMaxWidth())
+        } else Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            PrimaryButton(send, { scope.launch { BackupFlow.backUpNow(ctx) } }, Modifier.weight(1f))
+            SecondaryButton(later, { BackupReminder.snooze() }, Modifier.weight(1f))
+        }
     }
 }

@@ -205,6 +205,7 @@ private fun HomeHero(home: Home) {
     val line = syncStatusLine
     if (line != null) Box(Modifier.padding(start = 4.dp)) { line() }
     backupLine?.invoke()
+    com.tally.book.ui.family.BackupReminderCard()
 }
 
 @Composable
