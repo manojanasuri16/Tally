@@ -12,6 +12,12 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.BinaryBitmap
+import com.google.zxing.DecodeHintType
+import com.google.zxing.RGBLuminanceSource
+import com.google.zxing.common.HybridBinarizer
+import com.google.zxing.qrcode.QRCodeReader
 
 /*
  * QR code encoder (ported from Balance's app/js/lib/qr.js) (no state, no network). qrMatrix(text) returns the module grid
@@ -135,6 +141,27 @@ private fun qrPenalty(m: Array<IntArray>): Int {
     return p
 }
 
+/**
+ * True when the scanner's own decoder (ZXing, the one QrDecoder uses) reads [m] back as [text]. The encoder is exact
+ * (bit for bit what ZXing's encoder makes for the same mask), but the standard mask penalty does not look at what a
+ * detector does: in about 1 code in 30 a mask leaves a stray finder-pattern lookalike in the data area that ZXing takes
+ * for a corner, and that mask is not found at all, even in a perfect picture. Another mask of the same code reads fine.
+ */
+private fun qrReadsBack(m: Array<IntArray>, text: String): Boolean =
+    (3..7).all { qrReadsBackAt(m, text, it) }       // a camera sees the code at any size, and a few sizes see different things
+
+private fun qrReadsBackAt(m: Array<IntArray>, text: String, px: Int): Boolean {
+    val quiet = 4; val side = (m.size + 2 * quiet) * px
+    val pixels = IntArray(side * side) { i ->
+        val x = (i % side) / px - quiet; val y = (i / side) / px - quiet
+        if (x in m.indices && y in m.indices && m[y][x] == 1) 0xFF000000.toInt() else 0xFFFFFFFF.toInt()
+    }
+    return try {
+        val hints = mapOf(DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE), DecodeHintType.TRY_HARDER to true)
+        QRCodeReader().decode(BinaryBitmap(HybridBinarizer(RGBLuminanceSource(side, side, pixels))), hints).text == text
+    } catch (e: Exception) { false }
+}
+
 fun qrMatrix(text: String): Array<IntArray> {
     val bytes = text.toByteArray(Charsets.UTF_8).map { it.toInt() and 0xff }
     var ver = 1
@@ -213,12 +240,16 @@ fun qrMatrix(text: String): Array<IntArray> {
     fun applyMask(mask: Int) {
         for (y in 0 until size) for (x in 0 until size) if (!fn[y][x] && qrMaskBit(mask, x, y)) mods[y][x] = mods[y][x] xor 1
     }
-    var best = 0; var bestScore = Int.MAX_VALUE
-    for (mask in 0 until 8) {
+    // masks from the lowest penalty up; the first one the decoder reads back wins (the lowest penalty nearly always does)
+    val penalty = IntArray(8)
+    for (mask in 0 until 8) { applyMask(mask); drawFormat(mask); penalty[mask] = qrPenalty(mods); applyMask(mask) }
+    val order = (0 until 8).sortedBy { penalty[it] }
+    var best = order[0]
+    for (mask in order) {
         applyMask(mask); drawFormat(mask)
-        val s = qrPenalty(mods)
-        if (s < bestScore) { bestScore = s; best = mask }
+        val ok = qrReadsBack(mods, text)
         applyMask(mask)
+        if (ok) { best = mask; break }
     }
     applyMask(best); drawFormat(best)
     return mods

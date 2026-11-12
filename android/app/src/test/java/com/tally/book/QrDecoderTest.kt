@@ -22,8 +22,7 @@ class QrDecoderTest {
         return Triple(out, s, side)
     }
 
-    // fixed bytes, so the test draws the same code every run (a random family id made it flaky: about 1 code in 150 of
-    // either invite format does not read back, a limit of the QR encoder/decoder pair, not of the invite)
+    // fixed bytes keep the test the same every run; QrEncoderTest covers the random ones
     private val invite = Invite.make(Invite.b64url(ByteArray(16) { (it * 11).toByte() }), ByteArray(32) { (it * 5).toByte() }, 1_800_000_000_000L, "Example family", "Ravi")
 
     @Test fun readsTheInviteTheSheetDraws() {
