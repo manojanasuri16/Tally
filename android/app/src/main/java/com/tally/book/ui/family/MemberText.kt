@@ -31,7 +31,7 @@ object MemberText {
 
     fun removeQuestion(name: String): String = t(
         "member.remove.ask",
-        "Remove {name} from the family?\n\n{name} will stop seeing new loans and payments. What is already on their phone stays there.",
+        "Remove {name} from the family?\n\n{name} will stop seeing new entries and payments. What is already on their phone stays there.",
         "name" to name,
     )
 
@@ -45,7 +45,7 @@ object MemberText {
     fun leaveQuestion(v: MembershipView): String {
         val last = v.members.none { !it.me }
         val onlyAdmin = v.iAmAdmin && v.members.none { it.admin && !it.me }
-        val stays = t("leave.stays", "The loans and payments stay on this phone.")
+        val stays = t("leave.stays", "The entries and payments stay on this phone.")
         return when {
             last -> t("leave.ask.last", "Leave this family?\n\nYou are the last one in it, so the family will be deleted. {stays}", "stays" to stays)
             onlyAdmin -> {
@@ -54,7 +54,7 @@ object MemberText {
                 else t("leave.admin.someone", "Someone else will become the admin.")
                 t("leave.ask.admin", "Leave this family?\n\nYou are the only admin. {who} {stays} You will stop getting new ones from the family, and they will stop getting yours.", "who" to who, "stays" to stays)
             }
-            else -> t("leave.ask", "Leave this family?\n\nThe loans and payments stay on this phone. You will stop getting new ones from the family, and they will stop getting yours.")
+            else -> t("leave.ask", "Leave this family?\n\nThe entries and payments stay on this phone. You will stop getting new ones from the family, and they will stop getting yours.")
         }
     }
 

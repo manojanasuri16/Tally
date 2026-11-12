@@ -40,7 +40,7 @@ object WidgetText {
         val overdueLine = if (overdue > 0) tp("widget.overdue", overdue, "{n} overdue", "{n} overdue") else null
         val caption = t("widget.next", "Next payment")
         if (date == null) return Lines(caption, t("widget.nothing", "Nothing due soon"), null, overdueLine)
-        return Lines(caption, s.name.ifBlank { t("widget.aLoan", "A loan") }, whenText(date, today) + " · " + inr(s.amount), overdueLine)
+        return Lines(caption, s.name.ifBlank { t("widget.aLoan", "An entry") }, whenText(date, today) + " · " + inr(s.amount), overdueLine)
     }
 
     /** Names nothing and shows no amount: overdue, how many dates are due in the next [SOON_DAYS] days, or nothing. */

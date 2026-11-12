@@ -84,10 +84,10 @@ object BackupText {
     /** The restore question: what is replaced, the backup's date and loans when known, and what a restore cannot bring back. */
     fun restoreQuestion(date: String, loans: Int?, phoneHasData: Boolean): String {
         val head = if (phoneHasData) t("backup.ask.replace", "Replace everything on this phone with this backup?") else t("backup.ask.fresh", "Bring back this backup?")
-        val from = if (loans != null) tp("backup.ask.from", loans, "Backup from {date}, with {n} loan.", "Backup from {date}, with {n} loans.", mapOf("date" to fmtISODate(date)))
+        val from = if (loans != null) tp("backup.ask.from", loans, "Backup from {date}, with {n} entry.", "Backup from {date}, with {n} entries.", mapOf("date" to fmtISODate(date)))
         else t("backup.ask.fromDate", "Backup from {date}.", "date" to fmtISODate(date))
-        val what = if (phoneHasData) t("backup.ask.what", "The loans, payments, private loans, files, your name and your family on this phone will be replaced.") else ""
-        val limit = t("backup.ask.limit", "Shared loans and payments your family deleted since then stay deleted.")
+        val what = if (phoneHasData) t("backup.ask.what", "The entries, payments, private entries, files, your name and your family on this phone will be replaced.") else ""
+        val limit = t("backup.ask.limit", "Shared entries and payments your family deleted since then stay deleted.")
         return head + "\n\n" + listOf(from, what, limit).filter { it.isNotEmpty() }.joinToString(" ")
     }
 
@@ -96,7 +96,7 @@ object BackupText {
 
     fun sendReminder(): String = t("backup.sendReminder", "Send a copy of your backup somewhere safe, like Google Drive or WhatsApp to yourself.")
 
-    fun noLockWarning(): String = t("backup.noLock", "Without an app lock, anyone who gets this file can read your loans and join your family.")
+    fun noLockWarning(): String = t("backup.noLock", "Without an app lock, anyone who gets this file can read your entries and join your family.")
 }
 
 object BackupFlow {

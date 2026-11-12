@@ -129,7 +129,7 @@ class LoanPaidUpToTest {
         fun b(up: String) = obj("kind" to "bank", "name" to "x", "principal" to 100000, "rate" to 12, "tenure" to 12, "startDate" to "2026-01-10",
             "dueDay" to 5, "paidUpTo" to up)
         assertNull(validateLoan(b("2026-11-05"))); assertNull(validateLoan(b("2026-11-11")))
-        assertEquals("The paid-up-to date must be after the loan started.", validateLoan(b("2026-01-10")))
+        assertEquals("The paid-up-to date must be after the entry started.", validateLoan(b("2026-01-10")))
         assertEquals("The paid-up-to date cannot be in the future.", validateLoan(b("2026-11-12")))
         assertEquals("Please enter the date it is paid up to.", validateLoan(b("soon")))
     }

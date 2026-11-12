@@ -136,11 +136,11 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
     }
 
     EditSheet(
-        if (editing) t("loan.edit", "Edit loan") else t("loan.add", "Add a loan"), onDismiss = onDismiss,
+        if (editing) t("loan.edit", "Edit entry") else t("loan.add", "Add an entry"), onDismiss = onDismiss,
         onSave = { save() }, saveLabel = t("dlg.save", "Save"), saveEnabled = kind.isNotEmpty(),
     ) {
         if (!editing) {
-            FieldTitle(t("loan.which", "What kind of loan is it?"))
+            FieldTitle(t("loan.which", "What kind of entry is it?"))
             listOf("bank", "hand", "gold", "given").forEach { k ->
                 val isKind = if (k == "given") kind == "hand" && given else if (k == "hand") kind == "hand" && !given else kind == k
                 KindChoice(kindIcon(k), choiceTitle(k), choiceHelp(k), selected = isKind) {
@@ -159,8 +159,8 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
             }
             TextInput(name, { name = it; error = null }, t("loan.name", "Name"), placeholder = when (kind) {
                 "gold" -> t("loan.name.eg.gold", "e.g. Gold loan")
-                "hand" -> if (given) t("loan.name.eg.given", "e.g. Money for a friend") else t("loan.name.eg.hand", "e.g. Loan from a friend")
-                else -> t("loan.name.eg", "e.g. Home loan")
+                "hand" -> if (given) t("loan.name.eg.given", "e.g. Money for a friend") else t("loan.name.eg.hand", "e.g. From a friend")
+                else -> t("loan.name.eg", "e.g. Home EMI")
             })
             TextInput(
                 lender, { lender = it },
@@ -262,16 +262,16 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
 
 /** The four big choices of a new loan: [k] is "bank", "hand", "gold", or "given" (stored as a hand loan with direction given). */
 private fun choiceTitle(k: String): String = when (k) {
-    "bank" -> t("loan.kind.bank", "Bank loan")
+    "bank" -> t("loan.kind.bank", "Bank / EMI")
     "hand" -> t("loan.choice.hand", "Money I took from a person")
     "gold" -> kindLabel("gold")
-    else -> t("loan.choice.given", "Money I gave to someone")
+    else -> t("loan.choice.given", "Money I gave")
 }
 
 private fun choiceHelp(k: String): String = when (k) {
     "bank" -> t("loan.kind.bank.help", "A home, car, personal or group loan with a monthly EMI")
     "hand" -> loanWords(false).kindHelp
-    "gold" -> t("loan.kind.secured.help", "Gold, LIC policy, FD, land papers")
+    "gold" -> t("loan.kind.secured.help", "Gold, LIC policy, FD, land papers, something else")
     else -> loanWords(true).kindHelp
 }
 

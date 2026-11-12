@@ -6,10 +6,10 @@ import com.tally.book.core.*
 
 /** The kind as a group name: "Bank loan", "From a person", "Loan against something" (the gold kind, whatever is pledged). */
 fun kindLabel(kind: String?): String = when (kind) {
-    "bank" -> t("loan.kind.bank", "Bank loan")
+    "bank" -> t("loan.kind.bank", "Bank / EMI")
     "hand" -> t("loan.kind.hand", "From a person")
-    "gold" -> t("loan.kind.secured", "Loan against something")
-    else -> t("loan.kind.other", "Loan")
+    "gold" -> t("loan.kind.secured", "Pledged")
+    else -> t("loan.kind.other", "Entry")
 }
 
 /**

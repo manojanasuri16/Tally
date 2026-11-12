@@ -48,8 +48,8 @@ fun GoneCard(g: FamilyGone) {
     val scope = rememberCoroutineScope()
     val fam = g.familyName.ifBlank { t("family.the", "the family") }
     val text = when (g.why) {
-        "removed" -> t("gone.removed", "You were removed from {name}. Your loans are still on this phone.", "name" to fam)
-        "replaced" -> t("gone.replaced", "This phone was replaced by a new phone. It is no longer in {name}. Your loans are still on this phone.", "name" to fam)
+        "removed" -> t("gone.removed", "You were removed from {name}. Your entries are still on this phone.", "name" to fam)
+        "replaced" -> t("gone.replaced", "This phone was replaced by a new phone. It is no longer in {name}. Your entries are still on this phone.", "name" to fam)
         "denied" -> t("gone.denied", "An admin did not let you into {name}.", "name" to fam)
         else -> t("gone.expired", "Your request to join {name} ran out. Ask for a new code to try again.", "name" to fam)
     }

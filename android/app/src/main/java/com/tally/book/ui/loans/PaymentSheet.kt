@@ -142,7 +142,7 @@ private val askScope = kotlinx.coroutines.MainScope()
 /** Everything owed has been paid: offers once to close the loan. */
 private fun offerClose(loanId: String, message: String) {
     askScope.launch {
-        if (Dialogs.ask(message, t("loan.close", "Close this loan")))
+        if (Dialogs.ask(message, t("loan.close", "Close this entry")))
             Ledger.edit { closeLoan(loanId, todayISO()) }
     }
 }

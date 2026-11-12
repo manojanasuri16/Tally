@@ -116,9 +116,9 @@ fun FamilyScreen() {
 @Composable
 private fun NoFamily(onStart: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(t("family.none.title", "Share your loans with your family"), style = Apple.type.title2, color = Apple.colors.label)
+        Text(t("family.none.title", "Share your entries with your family"), style = Apple.type.title2, color = Apple.colors.label)
         Text(
-            t("family.none.body", "Everyone in your family sees the same loans and payments on their own phone. A loan you keep private stays on this phone."),
+            t("family.none.body", "Everyone in your family sees the same entries and payments on their own phone. An entry you keep private stays on this phone."),
             style = Apple.type.body, color = Apple.colors.secondaryLabel,
         )
         Text(t("family.safe", "Only your family can read what you share."), style = Apple.type.callout, color = Apple.colors.secondaryLabel)

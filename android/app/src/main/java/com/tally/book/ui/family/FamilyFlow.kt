@@ -85,7 +85,7 @@ object FamilyFlow {
 
     /** The join question: who invites (when the invite says) and the family's name, then what joining means. */
     fun joinQuestion(invite: Invite): String {
-        val body = t("join.body", "You will see this family's loans and payments, and they will see the ones you share.")
+        val body = t("join.body", "You will see this family's entries and payments, and they will see the ones you share.")
         val head = invite.inviter?.let { t("join.askFrom", "{inviter} is inviting you to {name}. Join?", "inviter" to it, "name" to invite.name) }
             ?: t("join.askName", "Join {name}?", "name" to invite.name)
         return head + "\n\n" + body

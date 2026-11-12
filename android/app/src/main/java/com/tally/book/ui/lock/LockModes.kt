@@ -42,7 +42,7 @@ object LockModes {
     /** Off: asks, confirms the current lock, then the book is written plain and every copy of the key is forgotten. */
     suspend fun turnOff(): Boolean {
         if (!Crypto.locked) return true
-        if (!Dialogs.ask(t("applock.off.ask", "Turn off the lock?\n\nAnyone who opens your phone will be able to see your loans."), t("applock.off.ok", "Turn off"), danger = true)) return false
+        if (!Dialogs.ask(t("applock.off.ask", "Turn off the lock?\n\nAnyone who opens your phone will be able to see your entries."), t("applock.off.ok", "Turn off"), danger = true)) return false
         if (!LockFlow.confirm(t("lock.forOff", "To turn off the lock."), null)) return false
         DB.remove("recoveryCode")
         Crypto.clearLock(); Bio.disable()
@@ -207,7 +207,7 @@ private fun CodeShown(code: String, setup: Boolean) {
             style = Apple.type.body, color = Apple.colors.label, modifier = Modifier.padding(horizontal = 4.dp),
         )
         if (setup) Text(
-            t("recovery.noPhoto", "Do not keep it only on this phone. Anyone with the code and a backup can open your loans."),
+            t("recovery.noPhoto", "Do not keep it only on this phone. Anyone with the code and a backup can open your entries."),
             style = Apple.type.footnote, color = LocalSemantic.current.warning, modifier = Modifier.padding(horizontal = 4.dp),
         )
     }

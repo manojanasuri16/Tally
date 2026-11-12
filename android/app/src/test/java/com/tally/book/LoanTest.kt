@@ -176,7 +176,7 @@ class LoanTest {
         assertEquals(0.0, w.num("owed"), 0.0); assertEquals("", w.s("nextDueDate")); assertFalse(w.b("overdue"))
         assertEquals(0, dueList(today).size)
         assertEquals(0.0, totals(today).num("owed"), 0.0)
-        assertEquals("This loan is closed. Reopen it to add a payment.",
+        assertEquals("This entry is closed. Reopen it to add a payment.",
             validatePayment(obj("loanId" to l.s("id"), "date" to "2026-11-01", "amount" to 5, "kind" to "interest")))
         reopenLoan(l.s("id"))
         assertEquals(100000.0, v(loan(l.s("id"))!!).num("owed"), 0.0)
@@ -347,7 +347,7 @@ class LoanTest {
     }
 
     @Test fun labels() {
-        assertEquals("Bank loan", kindLabel("bank")); assertEquals("From a person", kindLabel("hand")); assertEquals("Loan against something", kindLabel("gold"))
+        assertEquals("Bank / EMI", kindLabel("bank")); assertEquals("From a person", kindLabel("hand")); assertEquals("Pledged", kindLabel("gold"))
         assertEquals("EMI", payKindLabel("emi")); assertEquals("Interest", payKindLabel("interest")); assertEquals("Principal", payKindLabel("principal"))
     }
 }

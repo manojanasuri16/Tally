@@ -47,7 +47,7 @@ fun loanWords(given: Boolean): LoanWords = if (given) LoanWords(
     expected = t("home.expected", "Expected this month"), next = t("loan.next.given", "Expected next"),
     paidMonth = t("loan.paid.month.given", "Received for this month"), paidYear = t("loan.paid.year.given", "Received for this year"),
     toReturn = t("home.toComeBack", "To come back"),
-    closeAsk = t("pay.closeAsk.given", "Everything has come back. Close this loan now?"),
+    closeAsk = t("pay.closeAsk.given", "Everything has come back. Close this entry now?"),
     kindHelp = t("loan.kind.given.help", "Money you lent to someone you know"),
 ) else LoanWords(
     who = t("loan.lender.person", "Who lent the money?"), whoEg = t("loan.lender.person.eg", "Their name"),
@@ -57,7 +57,7 @@ fun loanWords(given: Boolean): LoanWords = if (given) LoanWords(
     expected = t("home.due", "Due this month"), next = t("loan.next", "Next payment"),
     paidMonth = t("loan.paid.month", "Paid for this month"), paidYear = t("loan.paid.year", "Paid for this year"),
     toReturn = t("home.toReturn", "To be returned"),
-    closeAsk = t("pay.closeAsk", "Everything is paid. Close this loan now?"),
+    closeAsk = t("pay.closeAsk", "Everything is paid. Close this entry now?"),
     kindHelp = t("loan.kind.hand.help", "Money borrowed from someone you know"),
 )
 

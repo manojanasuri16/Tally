@@ -161,7 +161,7 @@ fun LoansScreen() {
                 ) {
                     joinRequestsCard?.invoke()
                     if (!home.any) {
-                        EmptyState(t("home.empty", "No loans yet. Add one to start keeping track."), icon = Icons.Rounded.Group)
+                        EmptyState(t("home.empty", "No entries yet. Add one to start keeping track."), icon = Icons.Rounded.Group)
                         syncStatusLine?.let { line -> Box(Modifier.padding(start = 4.dp)) { line() } }
                         backupLine?.invoke()
                     } else {
@@ -174,7 +174,7 @@ fun LoansScreen() {
                         if (home.priv.loans.isNotEmpty()) PrivateGroup(home.priv, home.owed)
                         if (home.closed.isNotEmpty()) ClosedGroup(home.closed, closedOpen) { closedOpen = !closedOpen }
                     }
-                    PrimaryButton(t("home.addLoan", "Add a loan"), { adding = true }, Modifier.fillMaxWidth().padding(top = 4.dp))
+                    PrimaryButton(t("home.addLoan", "Add an entry"), { adding = true }, Modifier.fillMaxWidth().padding(top = 4.dp))
                 }
             }
         }
@@ -315,7 +315,7 @@ private fun ClosedGroup(list: List<Obj>, open: Boolean, toggle: () -> Unit) {
     AGroup {
         item {
             ARow(
-                t("home.closed", "Closed"), value = list.size.toString(), onClick = toggle,
+                t("home.closed", "Closed entries"), value = list.size.toString(), onClick = toggle,
                 trailing = { Icon(Icons.AutoMirrored.Rounded.ArrowForwardIos, null, Modifier.size(14.dp).rotate(angle), tint = Apple.colors.tertiaryLabel) },
             )
         }
@@ -360,7 +360,7 @@ fun ShareIntake() {
         pendingSharedText = null
         val open = loans().filter { !it.b("closed") }
         when {
-            open.isEmpty() -> scope.launch { Dialogs.tell(t("share.noLoan", "Add a loan first, then share the message again.")) }
+            open.isEmpty() -> scope.launch { Dialogs.tell(t("share.noLoan", "Add an entry first, then share the message again.")) }
             open.size == 1 -> { text = shared; loanId = open[0].s("id") }
             else -> { text = shared; choices = open.sortedBy { it.s("name").lowercase() } }
         }
@@ -370,7 +370,7 @@ fun ShareIntake() {
 
     val shared = text
     if (shared != null && loanId == null) {
-        EditSheet(t("share.which", "Which loan is this payment for?"), onDismiss = { text = null }, onSave = null) {
+        EditSheet(t("share.which", "Which entry is this payment for?"), onDismiss = { text = null }, onSave = null) {
             InsetSurface {
                 choices.forEachIndexed { i, l ->
                     if (i > 0) Hairline(start = 16.dp)

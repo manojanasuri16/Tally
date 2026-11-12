@@ -185,13 +185,13 @@ class LoanRulesTest {
 
     @Test fun rateChangeChecks() {
         val l = bank("emi" to 8885)
-        assertEquals("The new rate must start after the loan started.", addRateChange(l.s("id"), "2026-01-10", 10.0))
+        assertEquals("The new rate must start after the entry started.", addRateChange(l.s("id"), "2026-01-10", 10.0))
         assertEquals("Please enter the date the new rate starts.", addRateChange(l.s("id"), "", 10.0))
         assertEquals("The interest rate cannot be below zero.", addRateChange(l.s("id"), "2026-05-01", -1.0))
         assertEquals("Please enter the new EMI, or leave it empty to keep the EMI.", addRateChange(l.s("id"), "2026-05-01", 10.0, 0.0))
         val flat = bank("interestMethod" to "flat")
-        assertEquals("A new rate can only be set on a loan whose interest is on the amount still owed.", addRateChange(flat.s("id"), "2026-05-01", 10.0))
-        assertEquals("Only a bank loan can have a new rate.", addRateChange(hand(1000.0, 2.0, "2026-01-01").s("id"), "2026-05-01", 10.0))
+        assertEquals("A new rate can only be set on an entry whose interest is on the amount still owed.", addRateChange(flat.s("id"), "2026-05-01", 10.0))
+        assertEquals("Only a Bank / EMI entry can have a new rate.", addRateChange(hand(1000.0, 2.0, "2026-01-01").s("id"), "2026-05-01", 10.0))
         assertTrue(loan(l.s("id"))!!.objs("rateChanges").isEmpty())
     }
 
@@ -258,7 +258,7 @@ class LoanRulesTest {
         assertEquals(mapOf("gold" to "Gold loan", "lic" to "Loan against LIC policy", "fd" to "Loan against FD", "land" to "Loan against land papers",
             "none" to "Crop / other loan", "other" to "Loan against something else"), titles)
         assertEquals(listOf("Gold", "LIC policy", "Fixed deposit", "Land papers", "Nothing pledged", "Something else"), PLEDGES.map { pledgeLabel(it) })
-        assertEquals("Loan against something", kindLabel("gold"))
+        assertEquals("Pledged", kindLabel("gold"))
         val lic = saveLoan(obj("kind" to "gold", "pledge" to "lic", "name" to "Policy", "principal" to 20000, "rate" to 10, "startDate" to "2026-01-01"))
         assertEquals("Loan against LIC policy", loanKindLabel(lic))
         assertEquals("Gold loan", loanKindLabel(obj("kind" to "gold")))   // pledge defaults to gold
@@ -298,7 +298,7 @@ class LoanRulesTest {
         assertTrue(DB.oo("sync").oo("dirty").b(g.s("id")))
         val late = saveLoan(obj("kind" to "gold", "name" to "Old", "principal" to 30000, "rate" to 0, "startDate" to "2025-10-01", "repayBy" to "2026-10-01"))
         assertTrue(v(late).b("repayOverdue")); assertTrue(dueList(today).single().b("overdue"))
-        assertEquals("Only an open gold or hand loan can be renewed.", renewLoan(bank().s("id"), "2027-01-01", "2026-11-11"))
+        assertEquals("Only an open pledged entry or one from a person can be renewed.", renewLoan(bank().s("id"), "2027-01-01", "2026-11-11"))
     }
 
     // Renewing does not touch interest: pending interest stays pending.
@@ -348,9 +348,9 @@ class LoanRulesTest {
         assertEquals("Please enter the EMI or the number of instalments.", validateLoan(b("tenure" to 0)))
         assertEquals("The due day must be a day of the month, from 1 to 31.", validateLoan(b("dueDay" to 0)))
         assertNull(validateLoan(b("dueDay" to 0, "frequency" to "week")))
-        assertEquals("This EMI is too small to ever pay off the loan.", validateLoan(b("emi" to 1000)))   // interest alone is 1,000 a month
-        assertEquals("The new rate must start after the loan started.", validateLoan(b("rateChanges" to arr(obj("from" to "2025-12-01", "rate" to 10)))))
-        assertEquals("A new rate can only be set on a loan whose interest is on the amount still owed.",
+        assertEquals("This EMI is too small to ever pay this off.", validateLoan(b("emi" to 1000)))   // interest alone is 1,000 a month
+        assertEquals("The new rate must start after the entry started.", validateLoan(b("rateChanges" to arr(obj("from" to "2025-12-01", "rate" to 10)))))
+        assertEquals("A new rate can only be set on an entry whose interest is on the amount still owed.",
             validateLoan(b("interestMethod" to "flat", "rateChanges" to arr(obj("from" to "2026-05-01", "rate" to 10)))))
         assertEquals("There are two rate changes on the same date.",
             validateLoan(b("rateChanges" to arr(obj("from" to "2026-05-01", "rate" to 10), obj("from" to "2026-05-01", "rate" to 11)))))
@@ -358,16 +358,16 @@ class LoanRulesTest {
         fun g(vararg extra: Pair<String, Any?>) = obj("kind" to "gold", "name" to "x", "principal" to 5000, "rate" to 9, "startDate" to "2026-01-01")
             .also { o -> extra.forEach { (k, x) -> o[k] = norm(x) } }
         assertNull(validateLoan(g("pledge" to "land")))
-        assertEquals("Please choose what the loan is taken against.", validateLoan(g("pledge" to "car")))
-        assertEquals("Grams are only for a gold loan.", validateLoan(g("pledge" to "fd", "grams" to 10)))
+        assertEquals("Please choose what this is pledged against.", validateLoan(g("pledge" to "car")))
+        assertEquals("Grams are only for a pledged gold entry.", validateLoan(g("pledge" to "fd", "grams" to 10)))
         assertNull(validateLoan(g("grams" to 10)))
         assertEquals("Please say what is pledged.", validateLoan(g("pledge" to "other")))
         assertEquals("Please say what is pledged.", validateLoan(g("pledge" to "other", "pledgeText" to "   ")))
         assertNull(validateLoan(g("pledge" to "other", "pledgeText" to "Silver")))
         assertNull(validateLoan(g("pledge" to "other", "pledgeText" to "x".repeat(40))))
         assertEquals("Please keep it to 40 letters or fewer.", validateLoan(g("pledge" to "other", "pledgeText" to "x".repeat(41))))
-        assertEquals("The date to repay by must be after the loan started.", validateLoan(g("repayBy" to "2026-01-01")))
-        assertEquals("The date to repay by must be after the loan started.",
+        assertEquals("The date to repay by must be after the entry started.", validateLoan(g("repayBy" to "2026-01-01")))
+        assertEquals("The date to repay by must be after the entry started.",
             validateLoan(obj("kind" to "hand", "name" to "x", "principal" to 5, "startDate" to "2026-03-01", "repayBy" to "2026-02-01")))
         assertNull(validateLoan(g("repayBy" to "2026-12-31")))
     }

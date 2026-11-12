@@ -54,7 +54,7 @@ fun LoanDetailScreen(id: String) {
     if (cur != null) last[0] = cur
     val d = cur ?: last[0]
     if (d == null) {
-        SubScreen(t("loan.title", "Loan")) { pad -> Column(Modifier.padding(pad).fillMaxSize()) { EmptyState(t("loan.gone", "This loan is no longer here.")) } }
+        SubScreen(t("loan.title", "Entry")) { pad -> Column(Modifier.padding(pad).fillMaxSize()) { EmptyState(t("loan.gone", "This entry is no longer here.")) } }
         return
     }
     LoanBody(id, d)
@@ -83,15 +83,15 @@ private fun LoanBody(id: String, d: Detail) {
     fun closeIt() {
         scope.launch {
             val left = v.num("owed")
-            if (left > 0 && !Dialogs.ask(t("loan.close.ask", "Close this loan?\n\nThere is still {amt} left to pay. You can open it again later.", "amt" to amtMask(left)), t("loan.close", "Close this loan"))) return@launch
+            if (left > 0 && !Dialogs.ask(t("loan.close.ask", "Close this entry?\n\nThere is still {amt} left to pay. You can open it again later.", "amt" to amtMask(left)), t("loan.close", "Close this entry"))) return@launch
             Ledger.edit { closeLoan(id, todayISO()) }
-            Dialogs.snack(t("loan.closed.snack", "Loan closed"), t("dlg.undo", "Undo")) { Ledger.edit { reopenLoan(id) } }
+            Dialogs.snack(t("loan.closed.snack", "Entry closed"), t("dlg.undo", "Undo")) { Ledger.edit { reopenLoan(id) } }
         }
     }
     fun deleteIt() {
         scope.launch {
             val ok = Dialogs.ask(
-                t("loan.delete.ask", "Delete this loan?\n\nIts payments and documents are deleted too. This cannot be undone."),
+                t("loan.delete.ask", "Delete this entry?\n\nIts payments and documents are deleted too. This cannot be undone."),
                 t("dlg.delete", "Delete"), danger = true,
             )
             if (!ok) return@launch
@@ -145,10 +145,10 @@ private fun LoanBody(id: String, d: Detail) {
             AGroup {
                 if (!closed && kind == "bank" && interestMethod(loan) == "reducing") item { ButtonRow(t("loan.rateChange.title", "Rate changed")) { changingRate = true } }
                 if (!closed && hasRepayBy(kind) && v.s("repayBy").isNotEmpty()) item { ButtonRow(t("loan.renew.title", "Renewed")) { renewing = true } }
-                item { ButtonRow(t("loan.edit", "Edit loan")) { editingLoan = true } }
-                if (closed) item { ButtonRow(t("loan.reopen", "Open this loan again")) { Ledger.edit { reopenLoan(id) } } }
-                else item { ButtonRow(t("loan.close", "Close this loan")) { closeIt() } }
-                item { ButtonRow(t("loan.delete", "Delete this loan"), neg) { deleteIt() } }
+                item { ButtonRow(t("loan.edit", "Edit entry")) { editingLoan = true } }
+                if (closed) item { ButtonRow(t("loan.reopen", "Open this entry again")) { Ledger.edit { reopenLoan(id) } } }
+                else item { ButtonRow(t("loan.close", "Close this entry")) { closeIt() } }
+                item { ButtonRow(t("loan.delete", "Delete this entry"), neg) { deleteIt() } }
             }
         }
     }
@@ -168,7 +168,7 @@ private fun NextDue(loan: Obj, v: Obj) {
     val s = LocalSemantic.current
     val owed = v.num("owed")
     if (owed <= 0) {
-        AGroup { item { NoteRow(t("loan.paidOff", "Everything is paid. You can close this loan below.")) } }
+        AGroup { item { NoteRow(t("loan.paidOff", "Everything is paid. You can close this entry below.")) } }
         return
     }
     val date = v.s("nextDueDate")
@@ -282,7 +282,7 @@ private fun RateChanges(loan: Obj, closed: Boolean) {
                     trailing = if (closed) null else ({
                         BarIcon(Icons.Rounded.DeleteOutline, t("loan.rateChange.delete", "Delete this rate change"), {
                             scope.launch {
-                                if (Dialogs.ask(t("loan.rateChange.delete.ask", "Delete this rate change?\n\nThe loan goes back to the earlier rate from that date."), t("dlg.delete", "Delete"), danger = true))
+                                if (Dialogs.ask(t("loan.rateChange.delete.ask", "Delete this rate change?\n\nThe entry goes back to the earlier rate from that date."), t("dlg.delete", "Delete"), danger = true))
                                     Ledger.edit { removeRateChange(loan.s("id"), c.s("id")) }
                             }
                         }, tint = Apple.colors.secondaryLabel)

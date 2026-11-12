@@ -33,8 +33,8 @@ object SyncText {
         SyncError.Unauthorised ->
             if (joining) t("sync.err.badCode", "This family code does not work. Ask for a new one.")
             else t("sync.err.left", "This phone is no longer part of the family.")
-        SyncError.Removed -> t("sync.removed", "You were removed from the family. Your loans stay on this phone.")
-        SyncError.Replaced -> t("sync.replaced", "This phone was replaced by a new phone. Your loans stay on this phone.")
+        SyncError.Removed -> t("sync.removed", "You were removed from the family. Your entries stay on this phone.")
+        SyncError.Replaced -> t("sync.replaced", "This phone was replaced by a new phone. Your entries stay on this phone.")
         SyncError.NotAdmin -> t("sync.err.notAdmin", "Only a family admin can do that.")
         SyncError.Stale -> t("sync.err.stale", "The family changed just now. Try again.")
         SyncError.Limit -> t("sync.err.limit", "The family has reached a limit. Try again later.")
@@ -57,8 +57,8 @@ object SyncText {
         SyncResult.OldInvite -> oldCode()
         SyncResult.JoinPending -> t("join.pending", "Asked to join. Someone in your family needs to allow it; this phone joins on its own once they do.")
         SyncResult.JoinDenied -> t("join.denied", "You were not let into the family.")
-        SyncResult.Removed -> t("sync.removed", "You were removed from the family. Your loans stay on this phone.")
-        SyncResult.Replaced -> t("sync.replaced", "This phone was replaced by a new phone. Your loans stay on this phone.")
+        SyncResult.Removed -> t("sync.removed", "You were removed from the family. Your entries stay on this phone.")
+        SyncResult.Replaced -> t("sync.replaced", "This phone was replaced by a new phone. Your entries stay on this phone.")
         SyncResult.OldFamily -> oldFamilyText()
     }
 
@@ -74,7 +74,7 @@ object SyncText {
     }
 
     /** A family made by 0.1.0/0.2.0: sharing has to be set up again. */
-    fun oldFamilyText(): String = t("sync.oldFamily", "Sharing needs to be set up again after this update. Your loans stay on this phone.")
+    fun oldFamilyText(): String = t("sync.oldFamily", "Sharing needs to be set up again after this update. Your entries stay on this phone.")
 
     /** An invite made by 0.1.0/0.2.0. */
     fun oldCode(): String = t("join.oldCode", "This code is from an older Tally. Ask for a new one.")

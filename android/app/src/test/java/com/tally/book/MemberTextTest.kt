@@ -47,12 +47,12 @@ class MemberTextTest {
     @Test fun removeExplainsWhatStays() {
         val q = MemberText.removeQuestion("Asha")
         assertTrue(q.startsWith("Remove Asha from the family?\n\n"))
-        assertTrue(q.contains("Asha will stop seeing new loans and payments. What is already on their phone stays there."))
+        assertTrue(q.contains("Asha will stop seeing new entries and payments. What is already on their phone stays there."))
     }
 
     @Test fun leaveAsOrdinaryMemberKeepsTheOldWords() {
         val v = view(m("me", me = true), m("b", admin = true), m("c"))
-        assertTrue(MemberText.leaveQuestion(v).startsWith("Leave this family?\n\nThe loans and payments stay on this phone."))
+        assertTrue(MemberText.leaveQuestion(v).startsWith("Leave this family?\n\nThe entries and payments stay on this phone."))
     }
 
     @Test fun leaveAsOneOfSeveralAdminsSaysNothingAboutSuccessor() {
@@ -77,7 +77,7 @@ class MemberTextTest {
         val v = view(m("me", admin = true, me = true))
         val q = MemberText.leaveQuestion(v)
         assertTrue(q, q.contains("the family will be deleted"))
-        assertTrue(q.contains("The loans and payments stay on this phone."))
+        assertTrue(q.contains("The entries and payments stay on this phone."))
     }
 
     @Test fun requestReadsWhoAsksAndWhoInvited() {
@@ -102,7 +102,7 @@ class MemberTextTest {
         assertEquals("Waiting for an admin to let you in", waiting.text)
         assertEquals(SyncText.Action.RETRY, waiting.action)
         val old = SyncText.status(idle, false, 0, 0, oldFamily = true)
-        assertEquals("Sharing needs to be set up again after this update. Your loans stay on this phone.", old.text)
+        assertEquals("Sharing needs to be set up again after this update. Your entries stay on this phone.", old.text)
         assertEquals(SyncText.Action.SET_UP, old.action)
     }
 }

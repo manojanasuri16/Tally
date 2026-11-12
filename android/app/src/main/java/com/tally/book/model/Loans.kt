@@ -210,14 +210,14 @@ fun suggestPayment(loan: Obj, today: LocalDate = Clock.today()): Obj {
 /** The first problem with a loan form, in plain words, or null. */
 fun validateLoan(draft: Obj): String? {
     val kind = draft.s("kind")
-    if (draft.s("name").isBlank()) return t("loan.err.name", "Please give this loan a name.")
-    if (kind !in LOAN_KINDS) return t("loan.err.kind", "Please choose what kind of loan this is.")
-    if (draft.num("principal") <= 0) return t("loan.err.principal", "Please enter the loan amount.")
+    if (draft.s("name").isBlank()) return t("loan.err.name", "Please give this entry a name.")
+    if (kind !in LOAN_KINDS) return t("loan.err.kind", "Please choose what kind of entry this is.")
+    if (draft.num("principal") <= 0) return t("loan.err.principal", "Please enter the amount.")
     if (draft.num("rate") < 0) return t("loan.err.rate", "The interest rate cannot be below zero.")
-    val start = parseISO(draft.s("startDate")) ?: return t("loan.err.date", "Please enter the date the loan started.")
+    val start = parseISO(draft.s("startDate")) ?: return t("loan.err.date", "Please enter the date the entry started.")
     if (draft.s("paidUpTo").isNotEmpty()) {
         val up = parseISO(draft.s("paidUpTo")) ?: return t("loan.err.paidUpTo", "Please enter the date it is paid up to.")
-        if (!up.isAfter(start)) return t("loan.err.paidUpTo.early", "The paid-up-to date must be after the loan started.")
+        if (!up.isAfter(start)) return t("loan.err.paidUpTo.early", "The paid-up-to date must be after the entry started.")
         if (up.isAfter(Clock.today())) return t("loan.err.paidUpTo.future", "The paid-up-to date cannot be in the future.")
     }
     val m = draft.s("interestMethod")
@@ -233,11 +233,11 @@ fun validateLoan(draft: Obj): String? {
         val emi = draft.num("emi")
         if (emi > 0) {
             val r = draft.num("rate") / 100 / perYear(frequencyOf(draft))
-            if (emi <= draft.num("principal") * r) return t("loan.err.emiLow", "This EMI is too small to ever pay off the loan.")
+            if (emi <= draft.num("principal") * r) return t("loan.err.emiLow", "This EMI is too small to ever pay this off.")
         }
         val changes = draft.objs("rateChanges")
         if (changes.isNotEmpty() && interestMethod(draft) == "flat")
-            return t("loan.err.rateChange.flat", "A new rate can only be set on a loan whose interest is on the amount still owed.")
+            return t("loan.err.rateChange.flat", "A new rate can only be set on an entry whose interest is on the amount still owed.")
         for (c in changes) validateRateChangeAt(start, c.s("from"), c.num("rate"), c["emi"]?.let { n(it) })?.let { return it }
         if (changes.map { it.s("from") }.toSet().size != changes.size) return t("loan.err.rateChange.twice", "There are two rate changes on the same date.")
     } else {
@@ -246,35 +246,35 @@ fun validateLoan(draft: Obj): String? {
     }
     if (kind == "gold") {
         val p = draft.s("pledge")
-        if (p.isNotEmpty() && p !in PLEDGES) return t("loan.err.pledge", "Please choose what the loan is taken against.")
+        if (p.isNotEmpty() && p !in PLEDGES) return t("loan.err.pledge", "Please choose what this is pledged against.")
         if (p == "other") {
             val what = draft.s("pledgeText").trim()
             if (what.isEmpty()) return t("loan.err.pledgeText", "Please say what is pledged.")
             if (what.length > PLEDGE_TEXT_MAX) return t("loan.err.pledgeText.long", "Please keep it to {n} letters or fewer.", "n" to PLEDGE_TEXT_MAX)
         }
-        if (draft.num("grams") < 0 || (draft.num("grams") > 0 && pledgeOf(draft) != "gold")) return t("loan.err.grams", "Grams are only for a gold loan.")
+        if (draft.num("grams") < 0 || (draft.num("grams") > 0 && pledgeOf(draft) != "gold")) return t("loan.err.grams", "Grams are only for a pledged gold entry.")
     }
     val dir = draft.s("direction")
     if (dir.isNotEmpty() && dir != "taken" && dir != "given") return t("loan.err.direction", "Please choose whether you took or gave this money.")
     if (dir == "given" && kind != "hand") return t("loan.err.direction", "Please choose whether you took or gave this money.")
     if (hasRepayBy(kind) && draft.s("repayBy").isNotEmpty()) {
         val by = parseISO(draft.s("repayBy")) ?: return t("loan.err.repayBy", "Please enter a date for when it is to be returned.")
-        if (!by.isAfter(start)) return t("loan.err.repayBy.early", "The date to repay by must be after the loan started.")
+        if (!by.isAfter(start)) return t("loan.err.repayBy.early", "The date to repay by must be after the entry started.")
     }
     return null
 }
 
 /** The first problem with a rate change for [loan], or null: a bank loan with reducing interest, a date after the start, a rate, an EMI above 0 when given. */
 fun validateRateChange(loan: Obj, from: String, rate: Double, emi: Double?): String? {
-    if (loan.s("kind") != "bank") return t("loan.err.rateChange.kind", "Only a bank loan can have a new rate.")
-    if (interestMethod(loan) == "flat") return t("loan.err.rateChange.flat", "A new rate can only be set on a loan whose interest is on the amount still owed.")
-    val start = parseISO(loan.s("startDate")) ?: return t("loan.err.date", "Please enter the date the loan started.")
+    if (loan.s("kind") != "bank") return t("loan.err.rateChange.kind", "Only a Bank / EMI entry can have a new rate.")
+    if (interestMethod(loan) == "flat") return t("loan.err.rateChange.flat", "A new rate can only be set on an entry whose interest is on the amount still owed.")
+    val start = parseISO(loan.s("startDate")) ?: return t("loan.err.date", "Please enter the date the entry started.")
     return validateRateChangeAt(start, from, rate, emi)
 }
 
 private fun validateRateChangeAt(start: LocalDate, from: String, rate: Double, emi: Double?): String? {
     val d = parseISO(from) ?: return t("loan.err.rateChange.date", "Please enter the date the new rate starts.")
-    if (!d.isAfter(start)) return t("loan.err.rateChange.early", "The new rate must start after the loan started.")
+    if (!d.isAfter(start)) return t("loan.err.rateChange.early", "The new rate must start after the entry started.")
     if (rate < 0) return t("loan.err.rate", "The interest rate cannot be below zero.")
     if (emi != null && emi <= 0) return t("loan.err.rateChange.emi", "Please enter the new EMI, or leave it empty to keep the EMI.")
     return null
@@ -282,20 +282,20 @@ private fun validateRateChangeAt(start: LocalDate, from: String, rate: Double, e
 
 /** The first problem with renewing [loan] on [date] until [newRepayBy], or null. */
 fun validateRenewal(loan: Obj, newRepayBy: String, date: String): String? {
-    if (!hasRepayBy(loan.s("kind")) || loan.b("closed")) return t("loan.err.renew.kind", "Only an open gold or hand loan can be renewed.")
+    if (!hasRepayBy(loan.s("kind")) || loan.b("closed")) return t("loan.err.renew.kind", "Only an open pledged entry or one from a person can be renewed.")
     val on = parseISO(date) ?: return t("loan.err.renew.when", "Please enter the date it was renewed.")
     val by = parseISO(newRepayBy) ?: return t("loan.err.renew.date", "Please enter the new date to repay or renew by.")
     if (!by.isAfter(on)) return t("loan.err.renew.early", "The new date must be after the day it was renewed.")
     val start = parseISO(loan.s("startDate"))
-    if (start != null && !by.isAfter(start)) return t("loan.err.repayBy.early", "The date to repay by must be after the loan started.")
+    if (start != null && !by.isAfter(start)) return t("loan.err.repayBy.early", "The date to repay by must be after the entry started.")
     return null
 }
 
 /** The first problem with a payment form, in plain words, or null. */
 fun validatePayment(draft: Obj, today: LocalDate = Clock.today()): String? {
-    val l = loan(draft.s("loanId")) ?: return t("pay.err.loan", "This loan could not be found.")
+    val l = loan(draft.s("loanId")) ?: return t("pay.err.loan", "This entry could not be found.")
     val isNew = DB.objs("payments").none { it.s("id") == draft.s("id") && it.s("id").isNotEmpty() && !it.b("deleted") }
-    if (l.b("closed") && isNew) return t("pay.err.closed", "This loan is closed. Reopen it to add a payment.")
+    if (l.b("closed") && isNew) return t("pay.err.closed", "This entry is closed. Reopen it to add a payment.")
     if (draft.num("amount") <= 0) return t("pay.err.amount", "Please enter the amount paid.")
     val d = parseISO(draft.s("date")) ?: return t("pay.err.date", "Please enter the date of the payment.")
     if (d.isAfter(today)) return t("pay.err.future", "The payment date cannot be in the future.")

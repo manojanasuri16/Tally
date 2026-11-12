@@ -178,7 +178,7 @@ fun reopenLoan(id: String) {
  * Returns the problem in plain words (nothing is changed), or null when it was saved.
  */
 fun addRateChange(loanId: String, from: String, rate: Double, emi: Double? = null): String? {
-    val l = loan(loanId) ?: return t("pay.err.loan", "This loan could not be found.")
+    val l = loan(loanId) ?: return t("pay.err.loan", "This entry could not be found.")
     validateRateChange(l, from, rate, emi)?.let { return it }
     val list = l.aa("rateChanges")
     list.removeAll { it.asObj()?.s("from") == from.take(10) }
@@ -204,7 +204,7 @@ fun removeRateChange(loanId: String, changeId: String): Boolean {
  * interest is pending stays pending (pay it as an interest payment). Returns the problem in plain words, or null when it was saved.
  */
 fun renewLoan(id: String, newRepayBy: String, date: String): String? {
-    val l = loan(id) ?: return t("pay.err.loan", "This loan could not be found.")
+    val l = loan(id) ?: return t("pay.err.loan", "This entry could not be found.")
     validateRenewal(l, newRepayBy, date)?.let { return it }
     l.aa("renewals").add(obj("id" to uid("rn"), "date" to date.take(10), "from" to l.s("repayBy"), "to" to newRepayBy.take(10),
         "by" to myId(), "at" to Clock.millis().toDouble()))
