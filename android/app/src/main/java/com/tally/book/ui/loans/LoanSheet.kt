@@ -146,11 +146,15 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
                 FieldTitle(t("loan.pledge", "What is pledged?"))
                 ChoiceChips(PLEDGES.map { it to pledgeLabel(it) }, pledge, { pledge = it; error = null })
             }
-            TextInput(name, { name = it; error = null }, t("loan.name", "Name"), placeholder = t("loan.name.eg", "e.g. Home loan"))
+            TextInput(name, { name = it; error = null }, t("loan.name", "Name"), placeholder = when (kind) {
+                "gold" -> t("loan.name.eg.gold", "e.g. Gold loan")
+                "hand" -> if (given) t("loan.name.eg.given", "e.g. Money for a friend") else t("loan.name.eg.hand", "e.g. Loan from a friend")
+                else -> t("loan.name.eg", "e.g. Home loan")
+            })
             TextInput(
                 lender, { lender = it },
                 if (kind == "bank") t("loan.lender.bank", "Bank") else words.who,
-                placeholder = if (kind == "bank") t("loan.lender.bank.eg", "e.g. State Bank") else words.whoEg,
+                placeholder = when (kind) { "bank" -> t("loan.lender.bank.eg", "e.g. State Bank"); "gold" -> t("loan.lender.gold.eg", "e.g. bank or finance company"); else -> words.whoEg },
             )
             MoneyField(
                 principal, { principal = it; error = null }, words.amount,
