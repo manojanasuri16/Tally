@@ -204,7 +204,11 @@ object LockFlow {
                 s.stage = "new2"
             }
             "new2" -> {
-                if (secret != s.firstSecret) { s.stage = "new1"; s.firstSecret = ""; return s.fail(t("lock.mismatch", "They didn't match. Start again.")) }
+                if (secret != s.firstSecret) {
+                    // Back to the first step, so the title must say so too: "Once more" here made people re-enter the old PIN.
+                    s.stage = "new1"; s.firstSecret = ""; s.title = setupCopy(s.type, false).first
+                    return s.fail(t("lock.mismatch", "They didn't match. Start again."))
+                }
                 s.busy = true; s.say(t("lock.checking", "Checking…"))
                 withContext(Dispatchers.Default) { Crypto.setLock(secret, s.type) }
                 DB["lockType"] = s.type
