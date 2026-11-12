@@ -21,6 +21,8 @@ sealed class SyncError {
     object Unauthorised : SyncError() { override fun toString() = "Unauthorised" }
     /** An admin removed this phone's member from the family. */
     object Removed : SyncError() { override fun toString() = "Removed" }
+    /** This member came back on a new phone (an admin allowed it): this phone's credentials no longer work. */
+    object Replaced : SyncError() { override fun toString() = "Replaced" }
     /** Only an admin can do that. */
     object NotAdmin : SyncError() { override fun toString() = "NotAdmin" }
     /** Someone else changed the family meanwhile (a new key, a member who came or went): sync and try again. */
@@ -60,6 +62,8 @@ data class RelayMember(val id: String, val role: String, val since: Long, val ha
 data class RelayBox(val epoch: Int, val box: String)
 data class RelayInvite(val id: String, val by: String, val expiresAt: Long)
 data class RelayRequest(val inviteId: String, val memberId: String, val blob: String, val at: Long, val expiresAt: Long, val inviteBox: String, val invitedBy: String)
+/** What tally_join_check says: "approved" | "pending" | "denied" | "removed", and the member id it is about. */
+data class JoinCheck(val status: String, val member: String)
 /** A key box for one member, as sent with a rotation, an approval or a repair. */
 data class BoxFor(val member: String, val box: String)
 
@@ -86,6 +90,17 @@ interface Relay {
     /** "approved" | "pending" | "denied" | "removed"; Err(InviteGone) when the request is gone. */
     suspend fun joinStatus(familyId: String, inviteId: String, memberId: String, secret: String): RelayResult<String>
     suspend fun joinCancel(familyId: String, inviteId: String, memberId: String, secret: String): RelayResult<Unit>
+    /**
+     * Like [joinStatus], for a request that may have been answered by letting the phone back in as an existing member: the status
+     * and the member id the phone now is (the relay's word only: the grant proves it). Err(InviteGone) when the request is gone.
+     */
+    suspend fun joinCheck(familyId: String, inviteId: String, memberId: String, secret: String): RelayResult<JoinCheck>
+    /**
+     * An admin lets the phone that asked with [inviteId] back in as the active member [target] (back on a new phone): the target
+     * gets that phone's credentials, its old ones are told "replaced", and the family moves to [epoch] (current + 1) with
+     * [boxes] (the grant for [target] among them).
+     */
+    suspend fun reclaim(c: Cred, inviteId: String, target: String, epoch: Int, boxes: List<BoxFor>): RelayResult<Unit>
     suspend fun decide(c: Cred, inviteId: String, allow: Boolean, epoch: Int, box: String?): RelayResult<Unit>
     suspend fun setRole(c: Cred, target: String, admin: Boolean): RelayResult<Unit>
     /** Stores the family's sealed name (admins only; [epoch] must be the family's newest). */
@@ -179,6 +194,15 @@ class HttpRelay(
     override suspend fun joinCancel(familyId: String, inviteId: String, memberId: String, secret: String): RelayResult<Unit> =
         call("tally_join_cancel", obj("p_family" to familyId, "p_invite" to inviteId, "p_member" to memberId, "p_secret" to secret)) { }
 
+    override suspend fun joinCheck(familyId: String, inviteId: String, memberId: String, secret: String): RelayResult<JoinCheck> =
+        call("tally_join_check", obj("p_family" to familyId, "p_invite" to inviteId, "p_member" to memberId, "p_secret" to secret)) { v ->
+            val o = v.asObj() ?: throw BadResponse("join check: not an object")
+            JoinCheck(text(o["status"], "status"), text(o["member"], "member"))
+        }
+
+    override suspend fun reclaim(c: Cred, inviteId: String, target: String, epoch: Int, boxes: List<BoxFor>): RelayResult<Unit> =
+        call("tally_member_reclaim", cred(c, "p_invite" to inviteId, "p_target" to target, "p_epoch" to epoch, "p_boxes" to boxes(boxes))) { }
+
     override suspend fun decide(c: Cred, inviteId: String, allow: Boolean, epoch: Int, box: String?): RelayResult<Unit> =
         call("tally_request_decide", cred(c, "p_invite" to inviteId, "p_allow" to allow, "p_epoch" to epoch, "p_box" to box)) { }
 
@@ -242,7 +266,7 @@ class HttpRelay(
     companion object {
         /**
          * PostgREST error body { code, message, ... } to a SyncError (the codes are listed at the top of the tally_membership
-         * migration; "not an admin" became TA006 in tally_not_admin_code, because PostgREST sends 42501 as HTTP 401, whose body
+         * migration, TA007 "replaced" in tally_rejoin; "not an admin" became TA006 in tally_not_admin_code, because PostgREST sends 42501 as HTTP 401, whose body
          * HttpURLConnection drops for a fixed-length request).
          */
         fun mapError(status: Int, text: String): SyncError {
@@ -252,6 +276,7 @@ class HttpRelay(
             return when {
                 code == "28000" -> SyncError.Unauthorised
                 code == "TA001" -> SyncError.Removed
+                code == "TA007" -> SyncError.Replaced
                 code == "TA006" || code == "42501" -> SyncError.NotAdmin
                 code == "TA002" -> SyncError.Stale
                 code == "TA003" -> SyncError.Limit

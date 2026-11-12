@@ -54,6 +54,82 @@ class SyncLiveTest {
         }
     }
 
+    /** Back on a new phone, through the deployed relay: tally_member_reclaim, tally_join_check and the 'replaced' answer (TA007). */
+    @Test fun liveRejoin() {
+        assumeTrue("set TALLY_LIVE=1 to run against the deployed relay", System.getenv("TALLY_LIVE") == "1")
+        val url = prop("TALLY_SUPABASE_URL"); val key = prop("TALLY_SUPABASE_ANON_KEY")
+        assumeTrue(url.isNotBlank() && key.isNotBlank())
+        val relay = HttpRelay(url, key)
+        val cleanup = ArrayList<Cred>()
+        TestClock.start()
+        try { runBlocking { rejoin(relay, url, key, cleanup) } } finally {
+            TestClock.stop()
+            runBlocking {
+                for (c in cleanup) {
+                    val r = relay.leave(c)
+                    if (r !is RelayResult.Ok && r != RelayResult.Err(SyncError.Unauthorised) && r != RelayResult.Err(SyncError.Removed)) note("cleanup ${c.familyId} ${c.memberId} -> $r (NOT cleaned)")
+                    else note("cleanup ${c.familyId} ${c.memberId} -> $r")
+                }
+            }
+            File("build/tally-live-rejoin.txt").apply { parentFile?.mkdirs() }.writeText(log.toString())
+        }
+    }
+
+    private suspend fun rejoin(relay: HttpRelay, url: String, key: String, cleanup: MutableList<Cred>) {
+        fun credOf(p: Phone) = Cred(p.db.o("family").s("id"), p.me, p.db.o("family").o("me").s("secret"))
+        val a = Phone("A", relay); val b = Phone("B", relay)
+        a.loan("l1", "Live loan")
+        note("A create -> ${a.engine.createFamily("Live rejoin")}")
+        cleanup.add(credOf(a))
+        note("B join -> ${b.joinVia(a)}")
+        val credB = credOf(b)
+        b.payment("pb", "l1", 7); note("B sync -> ${b.sync()}")
+        TestClock.advance(1)
+
+        val b2 = Phone("B2", relay); b2.db.o("me")!!["name"] = "B"
+        note("B2 asks, back on a new phone -> ${b2.engine.requestJoin(a.invite(), back = true)}")
+        note("A sync -> ${a.sync()}; requests: ${a.engine.requests.value.map { it.name + " back=" + it.back }}")
+        val req = a.engine.requests.value.single()
+        assertTrue(req.back)
+        note("A allows as B -> ${a.engine.approveAs(req.id, b.me)}")
+        val r2 = b2.sync(); note("B2 sync -> $r2; B2 is ${b2.me}")
+        assertTrue(r2 is SyncResult.Done)
+        assertEquals("m-B", b2.me)
+        cleanup.add(credOf(b2))
+        val fam = b2.db.o("family").s("id")
+        assertEquals(setOf("1", "2"), b2.db.o("family").o("keys")!!.keys)
+        val oldPull = relay.pull(credB, 0, 1); note("old B phone pulls -> $oldPull")
+        assertEquals(RelayResult.Err(SyncError.Replaced), oldPull)
+        val oldSync = b.sync(); note("old B phone syncs -> $oldSync; gone: ${b.view.gone}")
+        assertEquals(SyncResult.Replaced, oldSync)
+        val st = (relay.state(credOf(b2), 0) as RelayResult.Ok).value
+        note("state as B2 -> epoch ${st.epoch}, role ${st.myRole}, members ${st.members.map { it.id }}")
+        assertEquals(2, st.epoch)
+        b2.payment("p2", "l1", 8); note("B2 sync -> ${b2.sync()}; A sync -> ${a.sync()}")
+        assertEquals("m-B", a.rec("payments", "p2")!!.s("by"))
+        assertEquals(a.shared(), b2.shared())
+
+        // a member cannot let anyone back; an unknown request says gone
+        val c = Phone("C", relay); c.db.o("me")!!["name"] = "C"
+        note("C asks back -> ${c.engine.requestJoin(b2.invite(), back = true)}")
+        val inviteId = c.db.o("joining").s("invite")
+        val asMember = relay.reclaim(credOf(b2), inviteId, a.me, 3, listOf(BoxFor(a.me, "x"), BoxFor(b2.me, "x"))); note("member B reclaims -> $asMember")
+        assertEquals(RelayResult.Err(SyncError.NotAdmin), asMember)
+        val noBox = relay.reclaim(credOf(a), inviteId, b2.me, 3, listOf(BoxFor(a.me, "x"))); note("reclaim without a box for the member -> $noBox")
+        assertTrue(noBox is RelayResult.Err && noBox.error is SyncError.BadData)
+        val ghost = relay.joinCheck(fam, Invite.idOf(Invite.newSecret()), "m-ghost", Membership.newCredential()); note("join check, unknown -> $ghost")
+        assertEquals(RelayResult.Err(SyncError.InviteGone), ghost)
+        val pending = relay.joinCheck(fam, inviteId, c.db.o("joining").s("as"), c.db.o("joining").o("me").s("secret")); note("join check, C waiting -> $pending")
+        assertEquals("pending", (pending as RelayResult.Ok).value.status)
+        note("A sync -> ${a.sync()}; deny C -> ${a.engine.deny(a.engine.requests.value.single().id)}")
+        val (pcode, ptext) = raw("POST", "$url/rest/v1/rpc/tally_ping", key, "{}")
+        note("POST /rest/v1/rpc/tally_ping -> $pcode $ptext")
+        assertEquals(200, pcode)
+        val (tcode, ttext) = raw("GET", "$url/rest/v1/tally_replaced?select=*", key)
+        note("GET /rest/v1/tally_replaced -> $tcode $ttext")
+        assertTrue(tcode == 401 || tcode == 403 || tcode == 404 || ttext.trim() == "[]")
+    }
+
     private suspend fun check(relay: HttpRelay, url: String, key: String, cleanup: MutableList<Cred>) {
         // ---- the relay alone
         val fam = Invite.newFamilyId()

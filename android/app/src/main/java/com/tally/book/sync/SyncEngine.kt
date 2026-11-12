@@ -76,6 +76,8 @@ sealed class SyncResult {
     object JoinDenied : SyncResult() { override fun toString() = "JoinDenied" }
     /** An admin removed this phone's member. The family is forgotten here, every record kept; see [MembershipView.gone]. */
     object Removed : SyncResult() { override fun toString() = "Removed" }
+    /** This member came back on a new phone, which took this phone's place. The family is forgotten here, every record kept. */
+    object Replaced : SyncResult() { override fun toString() = "Replaced" }
     /** The book has a family made by 0.1.0/0.2.0, which the relay no longer serves: leave it, then start or join again. */
     object OldFamily : SyncResult() { override fun toString() = "OldFamily" }
 }
@@ -129,7 +131,7 @@ class SyncEngine(
         val key = SyncCrypto.randomBytes(32)
         relay.createFamily(famId, meId, SyncCrypto.tokenHash(secret), SyncCrypto.tokenHash(notice)).orStop()
         book.edit { db ->
-            Membership.enter(db, famId, nm, meId, Membership.meObj(secret, notice, identity), mapOf(1 to key), "admin", emptyMap(), Clock.millis())
+            Membership.enter(db, famId, nm, meId, Membership.meObj(secret, notice, identity, Clock.millis()), mapOf(1 to key), "admin", emptyMap(), Clock.millis())
         }
         runSync()
     }
@@ -143,28 +145,41 @@ class SyncEngine(
     // ---------- joining ----------
 
     /** Asks to join with the invite in [inviteText] (a whole shared message is fine). */
-    suspend fun requestJoin(inviteText: String): SyncResult {
+    suspend fun requestJoin(inviteText: String, back: Boolean = false): SyncResult {
         val inv = Invite.find(inviteText) ?: return if (Invite.isOld(inviteText)) SyncResult.OldInvite else SyncResult.BadInvite
-        return requestJoin(inv)
+        return requestJoin(inv, back)
     }
 
     /**
      * Sends a join request for [invite]: this phone's new credentials (hashes only), and its name and public key sealed with
      * the invite's secret. Nothing of the family is on this phone until an admin allows it; then the next sync (or [checkJoin])
      * brings the keys in. Returns [SyncResult.JoinPending], or why not.
+     *
+     * [back]: "I was already in this family on another phone" (docs/DESIGN.md, "Back on a new phone"). It travels only inside the
+     * sealed request; an admin then picks which member this is (or lets the phone in as someone new). Allowed also while this
+     * phone already holds that same family from a restored backup: it keeps syncing as it is until an admin decides.
      */
-    suspend fun requestJoin(invite: Invite): SyncResult = exclusive {
-        if (book.read { Membership.hasFamily(it) || it.o("joining") != null }) return@exclusive SyncResult.AlreadyInFamily
+    suspend fun requestJoin(invite: Invite, back: Boolean = false): SyncResult = exclusive {
+        val refused = book.read { db ->
+            db.o("joining") != null || (Membership.hasFamily(db) && !(back && Membership.famOf(db)?.id == invite.familyId))
+        }
+        if (refused) return@exclusive SyncResult.AlreadyInFamily
         if (invite.expired(Clock.millis())) return@exclusive SyncResult.Failed(SyncError.InviteGone)
         val (meId, myName) = book.edit { db -> ensureMe(db) to (Invite.inviterName(db.o("me").s("name")) ?: "?") }
+        // the id the request is made under: this phone's own, unless that id is (or was) a member of a family already (a restored
+        // book): then a fresh one, since the relay refuses a request in the name of an active member
+        val asId = book.read { db ->
+            val known = Membership.hasFamily(db) || db.objs("members").any { it.s("id") == meId && it.s("pub").isNotEmpty() }
+            if (back && known) uid("m") else meId
+        }
         val (identity, secret, notice) = withContext(cpu) { Triple(SyncCrypto.newIdentity(), Membership.newCredential(), Membership.newCredential()) }
-        val blob = withContext(cpu) { Membership.sealRequest(invite.secret, invite.familyId, invite.inviteId, meId, myName, identity.publicSpki) }
-        val expires = relay.joinRequest(invite.familyId, invite.inviteId, meId, SyncCrypto.tokenHash(secret), SyncCrypto.tokenHash(notice), blob).orStop()
+        val blob = withContext(cpu) { Membership.sealRequest(invite.secret, invite.familyId, invite.inviteId, asId, myName, identity.publicSpki, back) }
+        val expires = relay.joinRequest(invite.familyId, invite.inviteId, asId, SyncCrypto.tokenHash(secret), SyncCrypto.tokenHash(notice), blob).orStop()
         book.edit { db ->
             db["joining"] = obj(
                 "fam" to invite.familyId, "name" to invite.name, "inviter" to invite.inviter, "invite" to invite.inviteId,
-                "s" to Invite.b64url(invite.secret), "me" to Membership.meObj(secret, notice, identity),
-                "at" to Clock.millis().toDouble(), "expires" to expires.toDouble(),
+                "s" to Invite.b64url(invite.secret), "me" to Membership.meObj(secret, notice, identity, Clock.millis()),
+                "at" to Clock.millis().toDouble(), "expires" to expires.toDouble(), "back" to back, "as" to asId,
             )
             db.remove("familyGone")
         }
@@ -210,39 +225,69 @@ class SyncEngine(
     /** Withdraws a waiting join request (best effort on the relay) and forgets it here. */
     suspend fun cancelJoin(): Boolean = withLockOrFalse {
         val j = book.read { it.o("joining")?.copyObj() } ?: return@withLockOrFalse true
-        relay.joinCancel(j.s("fam"), j.s("invite"), book.read { it.o("me").s("id") }, j.o("me").s("secret"))
+        relay.joinCancel(j.s("fam"), j.s("invite"), j.s("as").ifEmpty { book.read { it.o("me").s("id") } }, j.o("me").s("secret"))
         book.edit { it.remove("joining") }
         true
     }
 
-    /** Null when there is no waiting request or it was just approved (the family is now in the book); otherwise the outcome. */
+    /**
+     * Null when there is no waiting request, it was just approved (the family is now in the book), or it waits while this phone is
+     * already in that family (a restored book asking to come back as itself: it keeps syncing meanwhile); otherwise the outcome.
+     */
     private suspend fun joinStep(): SyncResult? {
         val j = book.read { it.o("joining")?.copyObj() } ?: return null
-        val meId = book.read { it.o("me").s("id") }
+        val back = j.b("back")
         val fam = j.s("fam"); val inviteId = j.s("invite")
+        val inFam = book.read { db -> Membership.famOf(db)?.id == fam }
+        val meId = book.read { it.o("me").s("id") }
+        val asId = j.s("as").ifEmpty { meId }
         val me = j.o("me") ?: return null
-        val status = when (val r = relay.joinStatus(fam, inviteId, meId, me.s("secret"))) {
+        val gone = SyncError.InviteGone
+        val check = if (back) when (val r = relay.joinCheck(fam, inviteId, asId, me.s("secret"))) {
             is RelayResult.Ok -> r.value
-            is RelayResult.Err -> if (r.error == SyncError.InviteGone) "gone" else throw Stop(r.error)
+            is RelayResult.Err -> if (r.error == gone) JoinCheck("gone", asId) else throw Stop(r.error)
+        } else when (val r = relay.joinStatus(fam, inviteId, asId, me.s("secret"))) {
+            is RelayResult.Ok -> JoinCheck(r.value, asId)
+            is RelayResult.Err -> if (r.error == gone) JoinCheck("gone", asId) else throw Stop(r.error)
         }
-        when (status) {
-            "pending" -> return SyncResult.JoinPending
-            "denied", "gone" -> { book.edit { Membership.forget(it, if (status == "denied") "denied" else "expired", Clock.millis()) }; return SyncResult.JoinDenied }
+        when (check.status) {
+            "pending" -> return if (inFam) null else SyncResult.JoinPending
+            "denied", "gone" -> {
+                val why = if (check.status == "denied") "denied" else "expired"
+                if (inFam) {
+                    // still in the family as before (a restored book): only the request goes, and the person is told once
+                    book.edit { db -> db.remove("joining"); db["familyGone"] = obj("name" to j.s("name"), "why" to why, "at" to Clock.millis().toDouble(), "stay" to true) }
+                    return null
+                }
+                book.edit { Membership.forget(it, why, Clock.millis()) }; return SyncResult.JoinDenied
+            }
             "removed" -> { book.edit { Membership.forget(it, "removed", Clock.millis()) }; return SyncResult.Removed }
             "approved" -> {}
             else -> throw Stop(SyncError.BadData("join status"))
         }
+        // who this phone now is: its own request id, or (back on a new phone) the member an admin picked. Only the relay says so
+        // here; the grant below opens and checks out only for the member id the admin sealed it to.
+        val x = check.member
+        if (x.isEmpty() || (!back && x != asId)) throw Stop(SyncError.Unverified)
         val secret = Invite.unb64url(j.s("s")) ?: throw Stop(SyncError.BadData("joining"))
         val identity = SyncCrypto.Identity(Invite.unb64url(me.s("pub"))!!, Invite.unb64url(me.s("priv"))!!)
-        val st = relay.state(Cred(fam, meId, me.s("secret")), 0).orStop()
+        val st = relay.state(Cred(fam, x, me.s("secret")), 0).orStop()
         // the grant: from = 0, the invite's MAC, every key up to the epoch it was made at
         val grant = withContext(cpu) {
             st.boxes.sortedByDescending { it.epoch }.firstNotNullOfOrNull { row ->
-                Membership.openBox(fam, meId, identity, row) { from, inv -> if (from == 0 && inv == inviteId) Invite.grantKey(secret) else null }
+                Membership.openBox(fam, x, identity, row) { from, inv -> if (from == 0 && inv == inviteId) Invite.grantKey(secret) else null }
             }
-        } ?: throw Stop(SyncError.Unverified)          // a relay that forged the keys: stay waiting, nothing entered
+        } ?: throw Stop(SyncError.Unverified)          // a relay that forged the keys or the member id: stay waiting, nothing entered
         book.edit { db ->
-            Membership.enter(db, fam, j.s("name"), grant.creator, me, grant.keys, st.myRole, grant.pins, Clock.millis(), inviteId)
+            val now = Clock.millis()
+            val oldMe = db.o("me").s("id")
+            if (x != oldMe) {
+                // things this phone wrote before it was in any family were this person's: they keep their name
+                if (asId == oldMe && !inFam) SyncModel.rewriteAuthor(db, oldMe, x)
+                db.oo("me")["id"] = x
+            }
+            if (inFam) Membership.reseat(db, me, grant, st.myRole, now, inviteId)
+            else Membership.enter(db, fam, j.s("name"), grant.creator, me, grant.keys, st.myRole, grant.pins, now, inviteId, back = x != asId)
             Membership.applyRoster(db, st)
             Membership.applyMeta(db, st.meta)          // the family may have been renamed since the invite was made
         }
@@ -349,6 +394,60 @@ class SyncEngine(
         runSync()
     }
 
+    /**
+     * Lets the phone that asked with [requestId], saying it was already in the family, in as the active member [target] (back on a
+     * new phone; docs/DESIGN.md "Back on a new phone"). In one relay call: [target] gets that phone's credentials (same member id,
+     * role and joined date), the old phone's credentials stop working (it is told it was replaced), and the family moves to a new
+     * key, sealed to every other member this phone has a pinned key for, with [target]'s new key carried as a re-pin. The grant is
+     * sealed for [target] only, so the relay cannot hand the place to another member. [target] may be this phone's own member
+     * (moving to a new phone): this phone is then out of the family once the call is made.
+     */
+    suspend fun approveAs(requestId: String, target: String): SyncResult = exclusive {
+        val c = checked[requestId] ?: return@exclusive SyncResult.Failed(SyncError.InviteGone)
+        var fam = book.read { Membership.famOf(it) } ?: return@exclusive noFamily()
+        if (!fam.admin) return@exclusive SyncResult.Failed(SyncError.NotAdmin)
+        if (!c.back) return@exclusive SyncResult.Failed(SyncError.Refused)
+        var made: Pair<Int, ByteArray>? = null
+        attempts@ for (attempt in 1..3) {
+            val st = refreshState(fam)
+            fam = book.read { Membership.famOf(it) }!!
+            if (!fam.admin) throw Stop(SyncError.NotAdmin)
+            if (fam.waitingForKey) throw Stop(SyncError.Stale)
+            if (st.members.none { it.id == target }) throw Stop(SyncError.Refused)
+            val e = fam.relayEpoch + 1
+            val key = SyncCrypto.randomBytes(32)
+            val f = fam
+            val repins = book.read { Membership.repins(it) } + (target to c.pub)
+            val boxes = withContext(cpu) {
+                val g = Membership.grant(f, c, to = target, top = e, extra = mapOf(e to key)) ?: throw Stop(SyncError.Stale)
+                rotationBoxes(f, st.members.filter { it.id != target }, e, key, repins) + BoxFor(target, g)
+            }
+            when (val r = relay.reclaim(fam.cred, requestId, target, e, boxes)) {
+                is RelayResult.Ok -> { made = e to key; break@attempts }
+                is RelayResult.Err -> if (r.error != SyncError.Stale || attempt == 3) throw Stop(r.error)
+            }
+        }
+        val (e, key) = made!!
+        val now = Clock.millis()
+        book.edit { db ->
+            Membership.addKeys(db, mapOf(e to key))
+            db.o("family")!!["relayEpoch"] = e
+            db.o("family")!!.oo("usedInvites")[requestId] = true
+            if (target != fam.myId) {
+                Membership.repin(db, target, c.pub)
+                // the member's record carries the new key (and this invite), so phones that learn of them later pin the right one
+                val rec = db.objs("members").firstOrNull { it.s("id") == target }
+                if (rec != null) {
+                    rec["pub"] = Invite.b64url(c.pub); rec["invite"] = requestId; rec.remove("left")
+                    rec["updatedAt"] = now.toDouble(); rec["updatedBy"] = fam.myId
+                    SyncModel.dirty(db)[target] = true
+                }
+            }
+        }
+        dropRequest(requestId)
+        runSync()
+    }
+
     /** Turns a join request down: nothing is shared, and the asking phone is told. */
     suspend fun deny(requestId: String): SyncResult = exclusive {
         val fam = book.read { Membership.famOf(it) } ?: return@exclusive noFamily()
@@ -405,7 +504,8 @@ class SyncEngine(
             if (fam.waitingForKey) throw Stop(SyncError.Stale)
             val e = fam.relayEpoch + 1
             val key = SyncCrypto.randomBytes(32)
-            val boxes = withContext(cpu) { rotationBoxes(fam, st.members.filter { it.id != memberId }, e, key) }
+            val repins = book.read { Membership.repins(it) }
+            val boxes = withContext(cpu) { rotationBoxes(fam, st.members.filter { it.id != memberId }, e, key, repins) }
             when (val r = relay.remove(fam.cred, memberId, e, boxes)) {
                 is RelayResult.Ok -> { newKey = e to key; break@attempts }
                 is RelayResult.Err -> if (r.error != SyncError.Stale || attempt == 3) throw Stop(r.error)
@@ -421,11 +521,11 @@ class SyncEngine(
     }
 
     /** Boxes for a new epoch [e] with [key]: one for each of [members] whose public key is pinned here (always this phone's own). */
-    private fun rotationBoxes(fam: Membership.Fam, members: List<RelayMember>, e: Int, key: ByteArray): List<BoxFor> =
+    private fun rotationBoxes(fam: Membership.Fam, members: List<RelayMember>, e: Int, key: ByteArray, repins: Map<String, ByteArray> = emptyMap()): List<BoxFor> =
         members.mapNotNull { m ->
-            val pub = if (m.id == fam.myId) fam.identity.publicSpki else fam.pins[m.id] ?: return@mapNotNull null
+            val pub = if (m.id == fam.myId) fam.identity.publicSpki else repins[m.id] ?: fam.pins[m.id] ?: return@mapNotNull null
             val has = if (m.id == fam.myId) fam.newest else minOf(m.has, fam.newest)
-            Membership.boxFor(fam, m.id, pub, has, e, mapOf(e to key))?.let { BoxFor(m.id, it) }
+            Membership.boxFor(fam, m.id, pub, has, e, mapOf(e to key), repins)?.let { BoxFor(m.id, it) }
         }
 
     private fun markLeft(db: Obj, memberId: String, by: String) {
@@ -471,7 +571,11 @@ class SyncEngine(
         val result = try {
             block()
         } catch (e: Stop) {
-            if (e.error == SyncError.Removed) gone() else SyncResult.Failed(e.error)
+            when (e.error) {
+                SyncError.Removed -> gone()
+                SyncError.Replaced -> replaced()
+                else -> SyncResult.Failed(e.error)
+            }
         } catch (e: SyncBook.SaveFailed) {
             SyncResult.Failed(SyncError.Storage)
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -492,6 +596,19 @@ class SyncEngine(
         notices.update(null, 0)
         _requests.value = emptyList(); checked.clear()
         return SyncResult.Removed
+    }
+
+    /**
+     * This phone's credentials were replaced: the member came back on a new phone. Forget the family, keep the records, say so once.
+     * Not while this very phone waits to come back to that family as itself (a restored book): the next check takes it in.
+     */
+    private suspend fun replaced(): SyncResult {
+        val waiting = runCatching { book.read { db -> db.o("joining")?.let { it.b("back") && it.s("fam") == db.o("family")?.s("id") } == true } }.getOrDefault(false)
+        if (waiting) return SyncResult.Failed(SyncError.Replaced)
+        runCatching { book.edit { db -> if (Membership.hasFamily(db)) Membership.forget(db, "replaced", Clock.millis()) } }
+        notices.update(null, 0)
+        _requests.value = emptyList(); checked.clear()
+        return SyncResult.Replaced
     }
 
     private suspend fun noFamily(): SyncResult = if (book.read { Membership.isOld(it) }) SyncResult.OldFamily else SyncResult.NoFamily
@@ -515,20 +632,25 @@ class SyncEngine(
     /** The relay's view of the family, applied to the book: new keys from this phone's boxes, roles, members. */
     private suspend fun refreshState(fam: Membership.Fam): RelayState {
         val st = relay.state(fam.cred, fam.newest).orStop()
-        val got = withContext(cpu) { openBoxes(fam, st.boxes) }
+        val (got, repins) = withContext(cpu) { openBoxes(fam, st.boxes) }
         book.edit { db ->
             checkFamily(db, fam)
             if (got.isNotEmpty()) Membership.addKeys(db, got)
+            repins.forEach { (m, p) -> Membership.repin(db, m, p) }
             Membership.applyRoster(db, st)
             Membership.applyMeta(db, st.meta)
         }
         return st
     }
 
-    /** The keys in [rows] this phone can open and check, in epoch order: each box is proved with a key held before it. */
-    private fun openBoxes(fam: Membership.Fam, rows: List<RelayBox>): Map<Int, ByteArray> {
+    /**
+     * The keys in [rows] this phone can open and check, in epoch order: each box is proved with a key held before it. Also the
+     * re-pins those boxes carry (members back on a new phone), the newest epoch's last.
+     */
+    private fun openBoxes(fam: Membership.Fam, rows: List<RelayBox>): Pair<Map<Int, ByteArray>, Map<String, ByteArray>> {
         val keys = HashMap(fam.keys)
         val got = HashMap<Int, ByteArray>()
+        val pins = LinkedHashMap<String, ByteArray>()
         var progress = true
         val left = rows.filter { it.epoch > fam.newest }.sortedBy { it.epoch }.toMutableList()
         while (progress && left.isNotEmpty()) {
@@ -540,10 +662,11 @@ class SyncEngine(
                 val box = Membership.openBox(fam.id, fam.myId, fam.identity, row) { from, _ -> keys[from]?.let { k -> Membership.boxAuthKey(k) } }
                     ?: continue
                 box.keys.forEach { (e, k) -> if (!keys.containsKey(e)) { keys[e] = k; got[e] = k } }
+                box.pins.forEach { (m, p) -> if (SyncCrypto.publicKey(p) != null) { pins.remove(m); pins[m] = p } }
                 it.remove(); progress = true
             }
         }
-        return got
+        return got to pins
     }
 
     /** A sync without the push and the files: the family's state, then the admin's work. For after a membership change. */
@@ -572,6 +695,7 @@ class SyncEngine(
                 checkFamily(db, f)
                 val o = SyncModel.mergeRemote(db, opened.filterNotNull())
                 Membership.pinFromRecords(db)
+                Membership.ownRecordCarriesMyKey(db, Clock.millis())
                 SyncModel.syncOf(db)["cursor"] = next.toDouble()
                 o
             }
@@ -587,7 +711,8 @@ class SyncEngine(
             if (st.rotate) {
                 val e = fam.relayEpoch + 1
                 val key = SyncCrypto.randomBytes(32)
-                val boxes = withContext(cpu) { rotationBoxes(fam, st.members, e, key) }
+                val repins = book.read { Membership.repins(it) }
+                val boxes = withContext(cpu) { rotationBoxes(fam, st.members, e, key, repins) }
                 when (val r = relay.rotate(fam.cred, e, boxes)) {
                     is RelayResult.Ok -> book.edit { db -> Membership.addKeys(db, mapOf(e to key)); db.o("family")!!["relayEpoch"] = e }
                     is RelayResult.Err -> if (r.error != SyncError.Stale) throw Stop(r.error)   // another admin rotated first
@@ -598,7 +723,8 @@ class SyncEngine(
                 val lacking = st.members.filter { it.id != fam.myId && it.has < fam.relayEpoch && fam.pins.containsKey(it.id) }
                 if (lacking.isNotEmpty()) {
                     val f = fam
-                    val boxes = withContext(cpu) { lacking.mapNotNull { m -> Membership.boxFor(f, m.id, f.pins[m.id]!!, m.has, f.relayEpoch)?.let { BoxFor(m.id, it) } } }
+                    val repins = book.read { Membership.repins(it) }
+                    val boxes = withContext(cpu) { lacking.mapNotNull { m -> Membership.boxFor(f, m.id, f.pins[m.id]!!, m.has, f.relayEpoch, pins = repins)?.let { BoxFor(m.id, it) } } }
                     if (boxes.isNotEmpty()) when (val r = relay.boxPut(fam.cred, fam.relayEpoch, boxes)) {
                         is RelayResult.Ok -> {}
                         is RelayResult.Err -> if (r.error != SyncError.Stale) throw Stop(r.error)
@@ -679,7 +805,7 @@ class SyncEngine(
         checked.clear(); good.forEach { checked[it.request.inviteId] = it }
         val names = db0.objs("members").associate { it.s("id") to it.s("name") }
         _requests.value = good.map { c ->
-            JoinRequest(c.request.inviteId, c.name, c.invitedBy, names[c.invitedBy].orEmpty(), c.request.at, c.request.expiresAt)
+            JoinRequest(c.request.inviteId, c.name, c.invitedBy, names[c.invitedBy].orEmpty(), c.request.at, c.request.expiresAt, c.back)
         }
     }
 

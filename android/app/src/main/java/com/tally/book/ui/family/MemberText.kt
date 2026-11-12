@@ -61,7 +61,8 @@ object MemberText {
     /** "Asha wants to join Smith family. Ravi invited them." The second sentence is left out when nobody is known. */
     fun requestLine(r: JoinRequest, familyName: String, myId: String): String {
         val fam = familyName.ifBlank { t("family.the", "the family") }
-        val head = t("req.line", "{name} wants to join {family}.", "name" to r.name, "family" to fam)
+        val head = if (r.back) t("req.backLine", "{name} says they are back on a new phone.", "name" to r.name)
+        else t("req.line", "{name} wants to join {family}.", "name" to r.name, "family" to fam)
         val by = when {
             r.invitedById.isNotEmpty() && r.invitedById == myId -> t("req.byMe", "You invited them.")
             r.invitedBy.isNotBlank() -> t("req.by", "{inviter} invited them.", "inviter" to r.invitedBy)
@@ -69,6 +70,33 @@ object MemberText {
         }
         return "$head $by"
     }
+
+    /**
+     * For a request from someone back on a new phone: the member it most likely is, to pre-select in the picker: the one whose
+     * name matches the name typed (ignoring case and spaces), else null (the admin picks). Never this phone's own member when
+     * another one matches.
+     */
+    fun likelyMember(r: JoinRequest, members: List<FamilyMember>): FamilyMember? {
+        fun norm(s: String) = s.trim().lowercase().replace(Regex("\\s+"), " ")
+        val want = norm(r.name)
+        val same = members.filter { norm(it.name) == want }
+        return same.firstOrNull { !it.me } ?: same.firstOrNull()
+    }
+
+    /** The question before "Allow as <name>". */
+    fun allowAsQuestion(name: String): String = t(
+        "req.as.ask",
+        "Let this phone become {name}?\n\n{name}'s old phone will stop working at once. Everything {name} added keeps their name.",
+        "name" to name,
+    )
+
+    /**
+     * Whether to tell this phone's person, once, to make a second admin: they are the only admin and someone else is in the
+     * family. Nobody but an admin can let a member back in on a new phone, so a family whose only admin loses their phone (and has
+     * no backup) cannot let them back.
+     */
+    fun needsSecondAdmin(iAmAdmin: Boolean, members: List<FamilyMember>): Boolean =
+        iAmAdmin && members.size >= 2 && members.none { it.admin && !it.me }
 
     /** How long an invite has left: "23 hours left", "Less than an hour left". */
     fun invitePeriod(expiresAt: Long, now: Long): String {

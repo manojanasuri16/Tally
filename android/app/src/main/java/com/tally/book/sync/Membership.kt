@@ -14,9 +14,11 @@ import java.util.Base64
  *     keys: { "<epoch>": base64(32 bytes) }, relayEpoch,   the keyring, and the family's newest epoch as last seen on the relay
  *     role, roster: [ { id, role, since, has } ], invites: [ { id, by, expires } ],   the relay's view, cached for the screens
  *     pins: { "<memberId>": base64url(SPKI) },       members' public keys, pinned the first time this phone learns them
+ *     repins: { "<memberId>": base64url(SPKI) },     pins that changed because that member came back on a new phone (an admin's
+ *                                                    approval, or a checked key box that said so); every box this phone seals carries them
  *     usedInvites: { "<inviteId>": true } }          invites this phone already decided (a replayed request is refused)
  * DB.joining: a join request waiting for an admin (docs/DESIGN.md, "Joining").
- * DB.familyGone: { name, why: "removed" | "denied" | "expired", at }: told once on screen, then cleared.
+ * DB.familyGone: { name, why: "removed" | "replaced" | "denied" | "expired", at }: told once on screen, then cleared.
  * DB.leaving: { fam, member, secret }: a leave the relay has not heard about yet (no internet when leaving).
  * A DB.family without v: 2 (it has `key`) was made by 0.1.0/0.2.0: [isOld]. It is no longer synced.
  */
@@ -67,11 +69,12 @@ object Membership {
 
     fun newCredential(): String = SyncCrypto.hex(SyncCrypto.randomBytes(32))
 
-    fun meObj(secret: String, notice: String, id: SyncCrypto.Identity): Obj =
-        obj("secret" to secret, "notice" to notice, "pub" to Invite.b64url(id.publicSpki), "priv" to Invite.b64url(id.privatePkcs8))
+    /** This phone's credentials in a family. [at]: when they were made (a restore keeps the newer of two sets for one member). */
+    fun meObj(secret: String, notice: String, id: SyncCrypto.Identity, at: Long = 0): Obj =
+        obj("secret" to secret, "notice" to notice, "pub" to Invite.b64url(id.publicSpki), "priv" to Invite.b64url(id.privatePkcs8), "at" to at.toDouble())
 
     /** Puts a version-2 family in the book (create or an approved join). The sync state starts over, as in version 1. */
-    fun enter(db: Obj, id: String, name: String, creator: String?, me: Obj, keys: Map<Int, ByteArray>, role: String, pins: Map<String, ByteArray>, now: Long, invite: String? = null) {
+    fun enter(db: Obj, id: String, name: String, creator: String?, me: Obj, keys: Map<Int, ByteArray>, role: String, pins: Map<String, ByteArray>, now: Long, invite: String? = null, back: Boolean = false) {
         val k = obj(); keys.forEach { (e, v) -> k[e.toString()] = b64.encodeToString(v) }
         val p = obj(); pins.forEach { (m, v) -> p[m] = Invite.b64url(v) }
         db["family"] = obj(
@@ -87,12 +90,42 @@ object Membership {
         )
         db.remove("joining"); db.remove("familyGone")
         val pub = me.s("pub")
-        SyncModel.upsertMe(db, now, pub)
         val meId = db.o("me")!!.s("id")
+        // back on a new phone: the approving admin wrote this member's record (with the new key); a phone that has no copy of
+        // it yet takes that one from the first pull instead of pushing a thinner one of its own over it
+        if (!back || db.objs("members").any { it.s("id") == meId }) SyncModel.upsertMe(db, now, pub)
         // the invite this member came in with travels in its record, so every admin refuses that invite if it comes back
         if (invite != null) db.objs("members").firstOrNull { it.s("id") == meId }?.set("invite", invite)
         db.o("family")!!.oo("pins")[meId] = pub
         SyncModel.markAllDirty(db)
+    }
+
+    /**
+     * Back on a new phone, while this phone already held the same family (a restored book): the new credentials and the grant's
+     * keys and pins take the place of the old ones; the records, the sync state and the keyring this phone had all stay. This
+     * phone is now member DB.me.id (set by the caller to the id the grant was sealed for).
+     */
+    fun reseat(db: Obj, me: Obj, grant: Box, role: String, now: Long, invite: String) {
+        val f = db.o("family") ?: return
+        f["me"] = me
+        addKeys(db, grant.keys)
+        f["relayEpoch"] = maxOf(f.num("relayEpoch").toInt(), grant.top)
+        f["role"] = role
+        f["creator"] = grant.creator
+        val meId = db.o("me")!!.s("id")
+        grant.pins.forEach { (m, p) -> if (m != meId) pin(db, m, p, force = true) }
+        f.oo("pins")[meId] = me.s("pub")
+        SyncModel.upsertMe(db, now, me.s("pub"))
+        db.objs("members").firstOrNull { it.s("id") == meId }?.set("invite", invite)
+        db.remove("joining"); db.remove("familyGone")
+    }
+
+    /** Keeps this phone's own member record carrying this phone's public key (after coming back on a new phone, once it is pulled). */
+    fun ownRecordCarriesMyKey(db: Obj, now: Long) {
+        val pub = db.o("family")?.o("me")?.s("pub")?.takeIf { it.isNotEmpty() } ?: return
+        val meId = db.o("me")?.s("id").orEmpty()
+        val rec = db.objs("members").firstOrNull { it.s("id") == meId } ?: return
+        if (rec.s("pub") != pub && !rec.b("deleted")) SyncModel.upsertMe(db, now, pub)
     }
 
     /** Leaves the family on this phone: forgets the family and the sync state, keeps every record. [why] is told once on screen. */
@@ -111,6 +144,47 @@ object Membership {
     fun pin(db: Obj, member: String, pub: ByteArray, force: Boolean = false) {
         val p = db.o("family")?.oo("pins") ?: return
         if (force || !p.containsKey(member)) p[member] = Invite.b64url(pub)
+    }
+
+    /**
+     * A member came back on a new phone with key [pub]: the pin is replaced and remembered as a re-pin, which every box this
+     * phone seals from now on carries, so the other phones seal new keys to the new phone and never again to the old one.
+     * Never for this phone's own id (its own key is its own).
+     */
+    fun repin(db: Obj, member: String, pub: ByteArray) {
+        val f = db.o("family") ?: return
+        if (member == db.o("me")?.s("id")) return
+        pin(db, member, pub, force = true)
+        f.oo("repins")[member] = Invite.b64url(pub)
+    }
+
+    fun repins(db: Obj): Map<String, ByteArray> {
+        val out = HashMap<String, ByteArray>()
+        db.o("family")?.o("repins")?.forEach { (m, v) -> (v as? String)?.let { Invite.unb64url(it) }?.let { out[m] = it } }
+        return out
+    }
+
+    /**
+     * A restore put [restored] in place of [current] (both whole books). When both are the same member of the same family but
+     * [current] holds newer credentials (it came back on a new phone after the backup was made, so the backup's are replaced),
+     * the current family block is kept, with every key either of them holds: the restored phone stays in the family as the new
+     * phone, and keeps the backup's loans and private entries. True when it did so.
+     */
+    fun keepNewerSeat(restored: Obj, current: Obj): Boolean {
+        val rf = restored.o("family") ?: return false
+        val cf = current.o("family") ?: return false
+        if (rf.num("v") != 2.0 || cf.num("v") != 2.0 || rf.s("id") != cf.s("id") || rf.s("id").isEmpty()) return false
+        val rid = restored.o("me")?.s("id").orEmpty()
+        if (rid.isEmpty() || rid != current.o("me")?.s("id")) return false
+        val rs = rf.o("me")?.s("secret").orEmpty(); val cs = cf.o("me")?.s("secret").orEmpty()
+        if (cs.isEmpty() || rs == cs) return false
+        if (cf.o("me").num("at") <= rf.o("me").num("at")) return false
+        val keep = cf.copyObj()
+        val keys = keep.oo("keys")
+        rf.o("keys")?.forEach { (e, k) -> if (!keys.containsKey(e)) keys[e] = k }
+        restored["family"] = keep
+        restored.remove("joining"); restored.remove("leaving")
+        return true
     }
 
     /** Pins the public key of every member record that has one and is not pinned yet (trust on first use). */
@@ -237,33 +311,42 @@ object Membership {
         return ByteArray(32) { s.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
     }
 
-    /** The box giving [to] (who holds keys up to [has]) every key from has+1 to [top] (all of which [fam] holds, or [extra] adds). */
-    fun boxFor(fam: Fam, to: String, pub: ByteArray, has: Int, top: Int, extra: Map<Int, ByteArray> = emptyMap()): String? {
+    /**
+     * The box giving [to] (who holds keys up to [has]) every key from has+1 to [top] (all of which [fam] holds, or [extra] adds).
+     * [pins]: re-pins it carries (members back on a new phone, [repins]), which the recipient takes (the box's MAC covers them).
+     */
+    fun boxFor(fam: Fam, to: String, pub: ByteArray, has: Int, top: Int, extra: Map<Int, ByteArray> = emptyMap(), pins: Map<String, ByteArray> = emptyMap()): String? {
         if (has < 1 || has >= top) return null
         val all = HashMap(fam.keys).apply { putAll(extra) }
         val keys = ((has + 1)..top).associateWith { all[it] ?: return null }
         val auth = all[has]?.let { boxAuthKey(it) } ?: return null
-        return sealBox(Box(fam.id, to, pub, has, keys, by = fam.myId), auth)
+        return sealBox(Box(fam.id, to, pub, has, keys, pins = pins.filterKeys { it != to }, by = fam.myId), auth)
     }
 
     // ---------- join requests and invite boxes ----------
 
     fun requestAad(fam: String, inviteId: String, member: String) = "tally-join:$fam:$inviteId:$member".toByteArray(Charsets.UTF_8)
 
-    /** The joiner's request: its name and public key, sealed under the invite's request key, bound to family, invite and member id. */
-    fun sealRequest(secret: ByteArray, fam: String, inviteId: String, member: String, name: String, pub: ByteArray): String {
-        val json = JsonCodec.stringify(obj("name" to name, "pub" to Invite.b64url(pub)))
+    /**
+     * The joiner's request: its name and public key, sealed under the invite's request key, bound to family, invite and member id.
+     * [back]: "I was already in this family on another phone" (only inside the seal; the relay never knows). Left out when false,
+     * so an ordinary request is byte-for-byte what older versions send.
+     */
+    fun sealRequest(secret: ByteArray, fam: String, inviteId: String, member: String, name: String, pub: ByteArray, back: Boolean = false): String {
+        val o = obj("name" to name, "pub" to Invite.b64url(pub))
+        if (back) o["back"] = true
+        val json = JsonCodec.stringify(o)
         return SyncCrypto.seal(Invite.requestKey(secret), json.toByteArray(Charsets.UTF_8), requestAad(fam, inviteId, member))
     }
 
-    class Asked(val name: String, val pub: ByteArray)
+    class Asked(val name: String, val pub: ByteArray, val back: Boolean = false)
 
     fun openRequest(secret: ByteArray, fam: String, inviteId: String, member: String, blob: String): Asked? = runCatching {
         val plain = SyncCrypto.open(Invite.requestKey(secret), blob, requestAad(fam, inviteId, member)) ?: return null
         val o = JsonCodec.parseObj(String(plain, Charsets.UTF_8))
         val name = Invite.cleanName(o.s("name"))?.takeIf { it == o.s("name") } ?: return null
         val pub = Invite.unb64url(o.s("pub"))?.takeIf { SyncCrypto.publicKey(it) != null } ?: return null
-        Asked(name, pub)
+        Asked(name, pub, o["back"] == true)
     }.getOrNull()
 
     fun inviteAad(fam: String, inviteId: String) = "tally-invite:$fam:$inviteId".toByteArray(Charsets.UTF_8)
@@ -275,7 +358,7 @@ object Membership {
     }
 
     /** A request an admin's phone has checked: who asks, who invited them, and the invite's secret (for the grant's MAC). */
-    class Checked(val request: RelayRequest, val name: String, val pub: ByteArray, val secret: ByteArray, val invitedBy: String)
+    class Checked(val request: RelayRequest, val name: String, val pub: ByteArray, val secret: ByteArray, val invitedBy: String, val back: Boolean = false)
 
     /**
      * Checks a request as an admin's phone sees it. Refused (null): an invite box not sealed under the family's current key
@@ -296,14 +379,20 @@ object Membership {
         if (db.objs("members").any { it.s("invite") == r.inviteId }) return null
         if (f.objs("roster").any { it.s("id") == r.memberId }) return null
         if (r.memberId == fam.myId) return null
-        return Checked(r, asked.name, asked.pub, secret, r.invitedBy)
+        return Checked(r, asked.name, asked.pub, secret, r.invitedBy, asked.back)
     }
 
-    /** The grant for a checked request: every key the family has, the admin's pins and the creator, MAC'd with the invite's grant key. */
-    fun grant(fam: Fam, c: Checked): String? {
-        val keys = (1..fam.relayEpoch).associateWith { fam.keys[it] ?: return null }
-        val pins = HashMap(fam.pins).apply { put(c.request.memberId, c.pub) }
-        return sealBox(Box(fam.id, c.request.memberId, c.pub, 0, keys, pins, fam.creator, fam.myId, c.request.inviteId), Invite.grantKey(c.secret))
+    /**
+     * The grant for a checked request: every key the family has (up to [top], with [extra] for a key being made now), the admin's
+     * pins and the creator, MAC'd with the invite's grant key. [to] is the member id the phone is let in as: its own request id
+     * (someone new) or, back on a new phone, the member the admin picked. The box is sealed for exactly that id, so the joining
+     * phone can only open it as that member, whatever the relay tells it.
+     */
+    fun grant(fam: Fam, c: Checked, to: String = c.request.memberId, top: Int = fam.relayEpoch, extra: Map<Int, ByteArray> = emptyMap()): String? {
+        val all = HashMap(fam.keys).apply { putAll(extra) }
+        val keys = (1..top).associateWith { all[it] ?: return null }
+        val pins = HashMap(fam.pins).apply { remove(c.request.memberId); put(to, c.pub) }
+        return sealBox(Box(fam.id, to, c.pub, 0, keys, pins, fam.creator, fam.myId, c.request.inviteId), Invite.grantKey(c.secret))
     }
 }
 
@@ -313,15 +402,15 @@ object Membership {
 data class FamilyMember(val id: String, val name: String, val admin: Boolean, val creator: Boolean, val me: Boolean, val since: Long)
 
 /** A join request an admin's phone has checked: "<name> wants to join <family>. <invitedBy> invited them." [id] is the invite id. */
-data class JoinRequest(val id: String, val name: String, val invitedById: String, val invitedBy: String, val at: Long, val expiresAt: Long)
+data class JoinRequest(val id: String, val name: String, val invitedById: String, val invitedBy: String, val at: Long, val expiresAt: Long, val back: Boolean = false)
 
 /** An invite that has not been used yet. */
 data class OpenInvite(val id: String, val byId: String, val byName: String, val mine: Boolean, val expiresAt: Long)
 
 /** This phone asked to join and waits for an admin. */
-data class PendingJoin(val familyName: String, val inviter: String?, val since: Long, val expiresAt: Long)
+data class PendingJoin(val familyName: String, val inviter: String?, val since: Long, val expiresAt: Long, val back: Boolean = false)
 
-/** Why this phone is no longer in (or did not get into) a family: "removed" | "denied" | "expired". Told once, then [SyncEngine.clearGone]. */
+/** Why this phone is no longer in (or did not get into) a family: "removed" | "replaced" | "denied" | "expired". Told once, then [SyncEngine.clearGone]. */
 data class FamilyGone(val familyName: String, val why: String, val at: Long)
 
 /** Everything the Family page and the home card need about membership, from the book (requests come from [SyncEngine.requests]). */
@@ -351,7 +440,7 @@ data class MembershipView(
             val invites = f?.objs("invites").orEmpty().map { i ->
                 OpenInvite(i.s("id"), i.s("by"), nameOf(i.s("by")), i.s("by") == myId, i.num("expires").toLong())
             }
-            val j = db.o("joining")?.let { PendingJoin(it.s("name"), (it["inviter"] as? String), it.num("at").toLong(), it.num("expires").toLong()) }
+            val j = db.o("joining")?.let { PendingJoin(it.s("name"), (it["inviter"] as? String), it.num("at").toLong(), it.num("expires").toLong(), it.b("back")) }
             val g = db.o("familyGone")?.let { FamilyGone(it.s("name"), it.s("why"), it.num("at").toLong()) }
             return MembershipView(
                 familyId = f?.s("id")?.takeIf { it.isNotEmpty() }, familyName = f?.s("name").orEmpty(), oldFamily = Membership.isOld(db),

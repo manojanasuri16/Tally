@@ -22,6 +22,8 @@ class FakeRelay : Relay {
         val invites = LinkedHashMap<String, InviteRow>()
         val requests = LinkedHashMap<String, Req>()
         val boxes = HashMap<String, HashMap<Int, String>>()
+        /** tally_replaced: (member id, secret hash) pairs a new phone replaced. */
+        val replaced = HashSet<Pair<String, String>>()
     }
 
     val fams = HashMap<String, Fam>()
@@ -44,6 +46,8 @@ class FakeRelay : Relay {
     var replayMeta: String? = null
     /** A hostile relay that ignores "used once" and accepts more requests for the same invite. */
     var ignoreUsed = false
+    /** A hostile relay that rewrites what tally_join_check tells a joining phone (another member id, say). */
+    var tamperJoinCheck: ((JoinCheck) -> JoinCheck)? = null
     /** How many file downloads were asked for. */
     var blobGets = 0
 
@@ -59,7 +63,10 @@ class FakeRelay : Relay {
     private fun auth(c: Cred): Pair<Fam, Member> {
         val f = fams[c.familyId] ?: fail(SyncError.Unauthorised)
         val m = f.members[c.memberId] ?: fail(SyncError.Unauthorised)
-        if (m.hash != hash(c.secret)) fail(SyncError.Unauthorised)
+        if (m.hash != hash(c.secret)) {
+            if ((m.id to hash(c.secret)) in f.replaced) fail(SyncError.Replaced)
+            fail(SyncError.Unauthorised)
+        }
         if (m.status == "removed") fail(SyncError.Removed)
         if (m.status != "active") fail(SyncError.Unauthorised)
         return f to m
@@ -197,6 +204,40 @@ class FakeRelay : Relay {
         val q = f.requests.values.firstOrNull { it.invite == inviteId && it.member == memberId && it.hash == hash(secret) && it.expires > now() }
             ?: fail(SyncError.InviteGone)
         q.status
+    }
+
+    /** tally_join_check: any member with this secret (approved / removed, with its id), else the request's own status. */
+    override suspend fun joinCheck(familyId: String, inviteId: String, memberId: String, secret: String) = r("joinCheck") {
+        val f = fams[familyId] ?: fail(SyncError.InviteGone)
+        val m = f.members.values.firstOrNull { it.hash == hash(secret) && (it.status == "active" || it.status == "removed") }
+        val out = if (m != null) JoinCheck(if (m.status == "active") "approved" else "removed", m.id)
+        else {
+            val q = f.requests.values.firstOrNull { it.invite == inviteId && it.member == memberId && it.hash == hash(secret) && it.expires > now() }
+                ?: fail(SyncError.InviteGone)
+            JoinCheck(q.status, memberId)
+        }
+        tamperJoinCheck?.invoke(out) ?: out
+    }
+
+    /** tally_member_reclaim: an admin; an open request; an active target; a box for the target; then the new epoch, all or nothing. */
+    override suspend fun reclaim(c: Cred, inviteId: String, target: String, epoch: Int, boxes: List<BoxFor>) = r("reclaim") {
+        val (f, me) = admin(c)
+        val q = f.requests.values.firstOrNull { it.invite == inviteId && it.status == "pending" && it.expires > now() } ?: fail(SyncError.InviteGone)
+        val t = f.members[target]?.takeIf { it.status == "active" } ?: fail(SyncError.Refused)
+        if (boxes.none { it.member == target }) fail(SyncError.BadData("target box"))
+        val saved = Triple(t.hash, t.notice, t.has); val savedBoxes = f.boxes[target]?.let { HashMap(it) }
+        val rep = target to t.hash
+        val had = rep in f.replaced
+        f.replaced.add(rep)
+        f.boxes.remove(target)
+        t.hash = q.hash; t.notice = q.notice; t.has = 0
+        try { newEpoch(f, me.id, epoch, boxes) } catch (x: E) {
+            t.hash = saved.first; t.notice = saved.second; t.has = saved.third
+            if (savedBoxes != null) f.boxes[target] = savedBoxes
+            if (!had) f.replaced.remove(rep)
+            throw x
+        }
+        Unit
     }
 
     override suspend fun joinCancel(familyId: String, inviteId: String, memberId: String, secret: String) = r("joinCancel") {
@@ -376,6 +417,17 @@ class Phone(val name: String, relay: Relay, pageSize: Int = 500) {
     fun invite(): String = when (val r = runBlocking { engine.newInvite() }) {
         is InviteResult.Made -> r.text
         is InviteResult.Failed -> error("no invite: ${r.result}")
+    }
+
+    /** This phone, saying it was already in the family, asks with [invite]; [admin] lets it in as [target]; this phone syncs in. */
+    fun comeBackVia(admin: Phone, target: String, invite: String = admin.invite()): SyncResult {
+        val asked = runBlocking { engine.requestJoin(invite, back = true) }
+        check(asked == SyncResult.JoinPending) { "request: $asked" }
+        check(admin.sync() is SyncResult.Done)
+        val req = admin.engine.requests.value.single { it.back }
+        val ok = runBlocking { admin.engine.approveAs(req.id, target) }
+        check(ok is SyncResult.Done || (target == admin.me && ok == SyncResult.Replaced)) { "approve: $ok" }
+        return sync()
     }
 
     /** This phone asks to join with [invite]; [admin] syncs, sees the request and allows it; this phone syncs in. */

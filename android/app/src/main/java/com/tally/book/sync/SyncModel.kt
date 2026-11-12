@@ -180,6 +180,20 @@ object SyncModel {
         return MergeOutcome(taken, kept, ignored, removed)
     }
 
+    /**
+     * Records this phone wrote under [from] (its own id before it was in any family) are this person's under [to]: the id an
+     * admin let it back in as. Only `by` and `updatedBy` change; the records are marked dirty when the family is entered.
+     */
+    fun rewriteAuthor(db: Obj, from: String, to: String) {
+        if (from.isEmpty() || from == to) return
+        for (key in listOf("loans", "payments", "files")) for (r in db.objs(key)) {
+            if (r.s("by") == from) r["by"] = to
+            if (r.s("updatedBy") == from) r["updatedBy"] = to
+            for (rn in r.objs("renewals")) if (rn.s("by") == from) rn["by"] = to
+        }
+        db.a("members")?.removeAll { it.asObj()?.s("id") == from }
+    }
+
     /** Marks every record dirty and every live file for upload: a book that has just created or joined a family. */
     fun markAllDirty(db: Obj) {
         val d = dirty(db); val up = blobsUp(db)
