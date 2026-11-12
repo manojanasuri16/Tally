@@ -17,7 +17,7 @@ import com.tally.book.MainActivity
 import com.tally.book.R
 import com.tally.book.core.*
 import com.tally.book.model.DB
-import com.tally.book.model.remindersFor
+import com.tally.book.model.dueDatesAhead
 import com.tally.book.sync.Notices
 import java.time.Instant
 import java.time.LocalDate
@@ -32,8 +32,8 @@ import java.util.concurrent.TimeUnit
  *
  * The job runs while the book may be sealed by the app lock, so it cannot read the book. Instead the app keeps a small copy of
  * only the DATES on which something is due or expected (no names, ids or amounts), in DevicePrefs ("tally-due-cache": device-only,
- * never in a backup), refreshed whenever the book changes. It reaches 3 days past the last time the app was used, plus anything
- * already overdue, which stays overdue until it is paid and the app has been used. The setting "Payment reminders" is on unless
+ * never in a backup), refreshed whenever the book changes. It holds every due date for the 60 days after the last refresh. A date that
+ * has passed counts as overdue until the next refresh after it was paid. The setting "Payment reminders" is on unless
  * switched off; nothing is shown until Android 13+ notifications are allowed.
  */
 object DueNotices {
@@ -85,11 +85,10 @@ object DueNotices {
         return next.toInstant().toEpochMilli() - nowMs
     }
 
-    /** The cache text for a [remindersFor] result: only the dates, split into money I took and money I gave. */
-    fun cacheOf(reminders: Obj): String {
-        val items = reminders.objs("items")
-        fun dates(given: Boolean) = arr().also { a -> items.filter { it.b("given") == given }.map { it.s("date") }.distinct().sorted().forEach { a.add(it) } }
-        return JsonCodec.stringify(obj("taken" to dates(false), "given" to dates(true)))
+    /** The cache text for [dueDatesAhead]: only the dates, split into money I took and money I gave. */
+    fun cacheOf(dates: List<Pair<LocalDate, Boolean>>): String {
+        fun list(given: Boolean) = arr().also { a -> dates.filter { it.second == given }.map { it.first.toString() }.distinct().sorted().forEach { a.add(it) } }
+        return JsonCodec.stringify(obj("taken" to list(false), "given" to list(true)))
     }
 
     /** The two date lists back from cache text (empty when it is missing or unreadable). */
@@ -119,7 +118,7 @@ object DueNotices {
     /** Re-reads the dates from the open book. Call on the main thread while the book is open; it does nothing when the setting is off. */
     fun refreshCache() {
         if (!enabled) { DevicePrefs.remove(CACHE); return }
-        DevicePrefs.set(CACHE, cacheOf(remindersFor(Clock.today(), 3)))
+        DevicePrefs.set(CACHE, cacheOf(dueDatesAhead(Clock.today(), 60)))
     }
 
     /** True once: the first time a loan is saved with the setting on and notifications not yet allowed, so the person is asked in plain words. */

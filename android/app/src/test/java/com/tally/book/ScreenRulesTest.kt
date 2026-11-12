@@ -118,13 +118,8 @@ class ScreenRulesTest {
     }
 
     @Test fun cacheKeepsOnlyDatesSplitByDirection() {
-        val r = obj("items" to arr(
-            obj("loanId" to "l1", "date" to "2026-11-10", "amount" to 5000.0, "given" to false),
-            obj("loanId" to "l2", "date" to "2026-11-10", "amount" to 800.0, "given" to false),
-            obj("loanId" to "l3", "date" to "2026-11-12", "amount" to 900.0, "given" to true),
-        ))
-        val text = DueNotices.cacheOf(r)
-        assertFalse(text.contains("l1")); assertFalse(text.contains("5000")); assertFalse(text.contains("amount"))
+        val text = DueNotices.cacheOf(listOf(d("2026-11-10") to false, d("2026-11-10") to false, d("2026-11-12") to true))
+        assertFalse(text.contains("amount")); assertFalse(text.contains("l1"))
         val (taken, given) = DueNotices.readCache(text)
         assertEquals(listOf("2026-11-10"), taken)
         assertEquals(listOf("2026-11-12"), given)
@@ -132,14 +127,60 @@ class ScreenRulesTest {
         assertEquals(emptyList<String>() to emptyList<String>(), DueNotices.readCache("not json"))
     }
 
-    @Test fun cacheOfTheBookFeedsThePick() {
-        resetModelState(); DB = freshDb(); ensureBookShape(DB)
-        DB.putAll(obj("v" to 1.0, "loans" to arr(
-            obj("id" to "l1", "kind" to "bank", "name" to "City Bank", "principal" to 120000.0, "rate" to 12.0, "tenure" to 12.0,
-                "startDate" to "2026-08-05", "dueDay" to 5.0, "closed" to false))))
-        val (taken, given) = DueNotices.readCache(DueNotices.cacheOf(remindersFor(Clock.today(), 3)))
-        assertTrue(taken.isNotEmpty()); assertTrue(given.isEmpty())
-        assertEquals(Kind.OVERDUE, DueNotices.pick(taken, given, Clock.today()))
+    private fun book(vararg loans: Obj) { resetModelState(); DB = freshDb(); ensureBookShape(DB); DB.putAll(obj("loans" to arr(*loans))) }
+    private fun bank(id: String, freq: String, start: String = "2026-08-05", tenure: Double = 24.0, closed: Boolean = false) = obj(
+        "id" to id, "kind" to "bank", "name" to "City Bank", "principal" to 120000.0, "rate" to 12.0, "tenure" to tenure, "frequency" to freq,
+        "startDate" to start, "dueDay" to 5.0, "closed" to closed)
+    private fun dates(l: List<Pair<LocalDate, Boolean>>, given: Boolean) = l.filter { it.second == given }.map { it.first.toString() }
+
+    @Test fun monthlyEmiGivesOverdueThenTheNext60Days() {
+        book(bank("l1", "month"))
+        val all = dueDatesAhead(Clock.today(), 60)
+        // 5 Sep, 5 Oct, 5 Nov are overdue (collapsed to the oldest); 5 Dec, 5 Jan are ahead; 5 Jan is within 60 days of 12 Nov? no (maybe 5 Jan = day 54)
+        assertEquals(listOf("2026-09-05", "2026-12-05", "2027-01-05"), dates(all, false))
+        assertTrue(dates(all, true).isEmpty())
+        assertEquals(Kind.OVERDUE, DueNotices.pick(dates(all, false), emptyList(), Clock.today()))
+    }
+
+    @Test fun weeklyGivesEveryWeekAndDailyIsCapped() {
+        book(bank("l1", "week", start = "2026-11-02", tenure = 52.0))
+        val w = dates(dueDatesAhead(Clock.today(), 60), false)
+        assertEquals("2026-11-09", w.first())                              // overdue, collapsed
+        assertTrue(w.contains("2026-11-16")); assertTrue(w.contains("2027-01-11")); assertFalse(w.contains("2027-01-18"))
+        book(bank("l2", "day", start = "2026-01-01", tenure = 1000.0))
+        val daily = dueDatesAhead(Clock.today(), 60)
+        assertTrue(daily.size <= 62)
+    }
+
+    @Test fun interestOnlyYearlyAndRepayByAndGivenVsTaken() {
+        book(
+            obj("id" to "g1", "kind" to "gold", "name" to "x", "principal" to 50000.0, "rate" to 12.0, "rateUnit" to "year", "interestEvery" to "year",
+                "startDate" to "2025-12-20", "closed" to false),
+            obj("id" to "h1", "kind" to "hand", "name" to "y", "principal" to 20000.0, "rate" to 0.0, "startDate" to "2026-01-01",
+                "repayBy" to "2026-12-01", "closed" to false),
+            obj("id" to "h2", "kind" to "hand", "name" to "z", "principal" to 20000.0, "rate" to 0.0, "startDate" to "2026-01-01",
+                "repayBy" to "2026-11-20", "direction" to "given", "closed" to false),
+        )
+        val all = dueDatesAhead(Clock.today(), 60)
+        assertEquals(listOf("2026-12-01", "2026-12-20"), dates(all, false))     // repayBy, and the yearly interest 20 Dec
+        assertEquals(listOf("2026-11-20"), dates(all, true))
+    }
+
+    @Test fun closedAndNoInterestLoansWithoutRepayByGiveNothing() {
+        book(
+            bank("l1", "month", closed = true),
+            obj("id" to "h1", "kind" to "hand", "name" to "y", "principal" to 20000.0, "rate" to 0.0, "startDate" to "2026-01-01", "closed" to false),
+            obj("id" to "h3", "kind" to "hand", "name" to "w", "principal" to 20000.0, "rate" to 0.0, "startDate" to "2026-01-01",
+                "repayBy" to "2026-12-01", "closed" to true),
+        )
+        assertTrue(dueDatesAhead(Clock.today(), 60).isEmpty())
+    }
+
+    @Test fun datesBeyondTheWindowAreLeftOut() {
+        book(obj("id" to "h1", "kind" to "hand", "name" to "y", "principal" to 20000.0, "rate" to 0.0, "startDate" to "2026-01-01",
+            "repayBy" to "2027-03-01", "closed" to false))
+        assertTrue(dueDatesAhead(Clock.today(), 60).isEmpty())
+        assertEquals(listOf("2027-03-01"), dates(dueDatesAhead(Clock.today(), 200), false))
     }
 
     @Test fun reminderComesAtNineLocalTime() {

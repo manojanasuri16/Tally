@@ -48,3 +48,26 @@ fun remindersFor(today: LocalDate = Clock.today(), horizonDays: Int = 0): Obj {
     val arr = arr(); items.forEach { arr.add(it) }
     return obj("horizon" to horizon.toDouble(), "any" to items.isNotEmpty(), "taken" to counts(false), "given" to counts(true), "items" to arr)
 }
+
+/**
+ * Every date something falls due or is expected on, from today to [days] ahead (clamped to 0..400), as (date, given) pairs,
+ * oldest first, with no names, ids or amounts: for the device copy the daily reminder reads while the book is sealed
+ * (data/DueNotices.kt). Each open loan's own schedule gives them (instalments at their frequency, interest periods, the
+ * repay-by date), worked from what has been paid so far; no-interest and closed loans give only their repay-by date (closed: none).
+ * Everything already overdue collapses into the single oldest date per direction (all that matters is that it is overdue), so a
+ * daily loan gives at most days + 2 dates per direction.
+ */
+fun dueDatesAhead(today: LocalDate = Clock.today(), days: Int = 60): List<Pair<LocalDate, Boolean>> {
+    val until = today.plusDays(days.coerceIn(0, 400).toLong())
+    val out = HashSet<Pair<LocalDate, Boolean>>()
+    for (l in loans().filter { !it.b("closed") }) {
+        val c = calcOf(l, paymentsOf(l.s("id")), until) ?: continue
+        val given = isGiven(l)
+        c.slots.forEach { if (!it.due.isAfter(until)) out.add(it.due to given) }
+        val by = if (hasRepayBy(l.s("kind"))) parseISO(l.s("repayBy")) else null
+        if (by != null && c.balance > 0 && !by.isAfter(until)) out.add(by to given)
+    }
+    val past = out.filter { it.first.isBefore(today) }
+    val keep = out - past.toSet() + listOf(false, true).mapNotNull { g -> past.filter { it.second == g }.minByOrNull { it.first } }
+    return keep.sortedWith(compareBy({ it.first }, { it.second }))
+}
