@@ -56,10 +56,9 @@ class LockModesTest {
 
     /** What LockModes.usePhone does once the code was typed back and the prompt said yes: the phone's lock becomes the lock. */
     private fun turnOnPhone(box: FakeBox, code: String): ByteArray = runBlocking {
-        val salt = Crypto.randomBytes(16)
-        val key = Crypto.deriveKeyBits(code, salt)
-        val r = PhoneSeal.wrap(box, salt, key) as Outcome.Ok
-        Crypto.adopt(Crypto.Opened(key, salt, LockRules.PHONE, 0, ""))
+        val made = Crypto.makePhone(code)
+        val r = PhoneSeal.wrap(box, made.lock.salt, made.copyKey) as Outcome.Ok
+        Crypto.adopt(made.lock)
         r.bytes
     }
 
@@ -115,7 +114,7 @@ class LockModesTest {
         Crypto.clearLock()
         val newPhone = FakeBox()          // the screen lock was set again (a new Keystore key) or this is another phone
         Crypto.unseal(env, code)
-        val again = PhoneSeal.wrap(newPhone, Crypto.salt!!, Crypto.key!!) as Outcome.Ok
+        val again = PhoneSeal.wrap(newPhone, Crypto.salt!!, Crypto.phoneCopyKey(code)!!) as Outcome.Ok
         Crypto.clearLock()
         val k = PhoneSeal.unlockKey(newPhone, again.bytes, env) as Outcome.Ok
         assertNotNull(Crypto.unsealWithKey(env, k.bytes))

@@ -144,6 +144,7 @@ private fun MemberSheet(m: FamilyMember, actions: List<MemberAction>, onDismiss:
 
 @Composable
 fun InviteSheet(onDismiss: () -> Unit) {
+    com.tally.book.ui.lock.SecureWhileShown()   // the QR is a live invite: no screenshots, no recents thumbnail of it
     val ctx = LocalContext.current
     val rev = rememberLedger()
     val view = remember(rev) { Sync.membership() }

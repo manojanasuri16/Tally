@@ -7,13 +7,16 @@ import java.security.SecureRandom
  * The two kinds of app lock, as plain JVM rules (docs/DESIGN.md, "App lock"). No Android here, so all of it runs in JVM tests;
  * ui/lock/PhoneLock.kt is the Android Keystore and system prompt side.
  *
- * - Tally's own lock: a PIN, pattern or password. The book is sealed under PBKDF2 of it (Crypto, unchanged). A fingerprint can
- *   open it through Bio, which keeps a copy of the derived key under a Keystore key.
- * - The phone's lock (envelope type "phone"): the book is sealed exactly the same way, but the secret is a random 20-digit
- *   recovery code made by the app and written down by the person. A copy of the derived key is kept on the phone sealed under
- *   an Android Keystore key that only the phone's own screen lock or fingerprint can use (PhoneLock). So the phone's prompt
- *   opens the book every day, and the recovery code opens it when that copy is gone (screen lock removed, a new phone, a
- *   backup). The code lives inside the sealed book (DB.recoveryCode) so it can be shown again behind the phone's prompt.
+ * Both kinds seal the book under a random data key (Crypto, version 2) and both have a 20-digit recovery code, which opens the
+ * book and every backup anywhere. The code lives inside the sealed book (DB.recoveryCode) so it can be shown again after a check.
+ * - Tally's own lock: a PIN, pattern or password. It opens the data key only together with this phone's own secret (Crypto.device,
+ *   under an Android Keystore key), so a copied book or backup cannot be guessed from the PIN alone. A fingerprint can open it
+ *   through Bio, which keeps a copy of the PIN's key under a Keystore key.
+ * - The phone's lock (envelope type "phone"): a copy of the recovery code's key is kept on the phone sealed under an Android
+ *   Keystore key that only the phone's own screen lock or fingerprint can use (PhoneLock). So the phone's prompt opens the book
+ *   every day, and the recovery code opens it when that copy is gone (screen lock removed, a new phone, a backup).
+ * Also here: wrong tries and their waits ([Attempts]), when coming back re-locks ([LockRules.relockOnReturn]) and when the
+ * window blocks screenshots ([LockRules.secureWindow]).
  */
 
 /** The 20-digit recovery code of the phone's lock. Digits only: easy to write down and to type in any language. */
@@ -76,6 +79,77 @@ object LockRules {
         RECOVERY, PHONE -> RecoveryCode.DIGITS
         "password" -> 6
         else -> 4
+    }
+
+    /**
+     * How long a system sheet, picker, viewer or camera the app opened itself ([com.tally.book.MainActivity.holdLock]) may keep
+     * the app open: coming back later than this re-locks as usual.
+     */
+    const val HOLD_MS = 2 * 60_000L
+
+    /**
+     * Whether coming back to the app asks for the lock again. [stoppedAt] when it left (0: never left), [now], [limit] the re-lock
+     * delay, [heldAt] when the app last opened something of its own (0: nothing). Times are on one clock (elapsed real time).
+     * Back within the delay: no. Otherwise yes, unless the app opened that sheet or viewer itself at most [HOLD_MS] (or the delay,
+     * if longer) ago.
+     */
+    fun relockOnReturn(stoppedAt: Long, now: Long, limit: Long, heldAt: Long): Boolean {
+        if (stoppedAt <= 0) return false
+        if (now - stoppedAt <= limit) return false
+        val held = heldAt > 0 && now - heldAt in 0..maxOf(HOLD_MS, limit)
+        return !held
+    }
+
+    /** FLAG_SECURE (no screenshots, a blank recents card): while a lock is set, while amounts are hidden, and while a secret is on screen. */
+    fun secureWindow(locked: Boolean, hidden: Boolean, secretShown: Boolean): Boolean = locked || hidden || secretShown
+}
+
+/**
+ * Wrong tries at the lock (PIN, pattern, password, recovery code): the first [FREE] cost nothing, then each one waits longer
+ * ([WAITS_MS]: 30 s, 1 min, 5 min, 15 min, then 1 hour each). Kept in device storage, so closing the app or restarting the phone
+ * does not reset it; a right answer does. Nothing is ever wiped.
+ */
+object Attempts {
+    const val FREE = 5
+    val WAITS_MS = longArrayOf(30_000L, 60_000L, 5 * 60_000L, 15 * 60_000L, 60 * 60_000L)
+
+    /** The wait after [fails] wrong tries in a row (0 = none). */
+    fun waitAfter(fails: Int): Long = if (fails < FREE) 0L else WAITS_MS[minOf(fails - FREE, WAITS_MS.size - 1)]
+
+    /** Where the count lives: DevicePrefs on the phone, a map in tests. */
+    interface Store { fun get(key: String): String?; fun set(key: String, value: String?) }
+
+    private const val FAILS = "tally-lock-fails"
+    private const val LAST = "tally-lock-failed-at"
+
+    class Gate(private val store: Store) {
+        fun fails(): Int = store.get(FAILS)?.toIntOrNull() ?: 0
+        private fun lastAt(): Long = store.get(LAST)?.toLongOrNull() ?: 0L
+
+        /** How long until the next try is allowed (0 = now). A clock set back restarts the wait from now rather than skipping it. */
+        fun remaining(now: Long): Long {
+            val w = waitAfter(fails())
+            if (w == 0L) return 0L
+            val last = lastAt()
+            if (now < last) { store.set(LAST, now.toString()); return w }
+            return maxOf(0L, last + w - now)
+        }
+
+        /** A wrong try at [now]. Returns the wait it causes. */
+        fun failed(now: Long): Long {
+            val f = fails() + 1
+            store.set(FAILS, f.toString()); store.set(LAST, now.toString())
+            return waitAfter(f)
+        }
+
+        fun succeeded() { store.set(FAILS, null); store.set(LAST, null) }
+    }
+
+    /** "4:59", "0:30", "1:00:00": what is left of a wait, rounded up to the second. */
+    fun format(ms: Long): String {
+        val s = (ms + 999) / 1000
+        val h = s / 3600; val m = (s % 3600) / 60; val sec = s % 60
+        return if (h > 0) String.format(java.util.Locale.ROOT, "%d:%02d:%02d", h, m, sec) else String.format(java.util.Locale.ROOT, "%d:%02d", m, sec)
     }
 }
 

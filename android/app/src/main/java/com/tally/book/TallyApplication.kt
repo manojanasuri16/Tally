@@ -22,6 +22,8 @@ class TallyApplication : Application() {
         Backups.init(this)
         Ledger.init(this)
         FileStore.init(this)
+        // this phone's own secret for Tally's own lock (under an Android Keystore key): a PIN opens the book only here
+        com.tally.book.data.Crypto.device = com.tally.book.ui.lock.DeviceKey(this)
         Bio.init(this)
         PhoneLock.init(this)
         installSyncHooks()

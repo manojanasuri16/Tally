@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.tally.book.MainActivity
 import com.tally.book.core.*
+import com.tally.book.data.Attempts
 import com.tally.book.data.Crypto
 import com.tally.book.data.Ledger
 import com.tally.book.data.LockRules
@@ -103,12 +104,17 @@ private fun confirmCopy(type: String): Pair<String, String> {
     return t("lock.confirm", "Confirm your {what}", "what" to noun) to t("lock.confirmMsg", "Enter your current {what} to continue.", "what" to noun)
 }
 
-/** verifyPin(): the secret against the current lock, without touching it. */
-suspend fun verifySecret(secret: String): Boolean {
-    val k = Crypto.key ?: return false
-    val s = Crypto.salt ?: return false
-    return withContext(Dispatchers.Default) { runCatching { Crypto.deriveKeyBits(secret, s).contentEquals(k) }.getOrDefault(false) }
-}
+/** verifyPin(): the secret against the current lock, without touching it. Gives the device copy key (the PIN's key) when right. */
+suspend fun verifySecret(secret: String, viaCode: Boolean): ByteArray? =
+    withContext(Dispatchers.Default) { Crypto.checkSecret(secret, viaCode) }
+
+/** Wrong tries and their waits, kept on the device (data/LockRules.kt, Attempts). */
+val lockGate = Attempts.Gate(object : Attempts.Store {
+    override fun get(key: String): String? = DevicePrefs.get(key)
+    override fun set(key: String, value: String?) = DevicePrefs.set(key, value)
+})
+
+fun waitMsg(ms: Long) = t("lock.wait", "Too many wrong tries. Try again in {time}.", "time" to Attempts.format(ms))
 
 /** One run of the lock screen: what it asks for and what happens with the answer. */
 class LockSession(
@@ -116,8 +122,8 @@ class LockSession(
     val skippable: Boolean,
     /** The sealed envelope ('open', 'sealedfile'): its `l` sizes and auto-submits a PIN. */
     val env: Obj? = null,
-    /** 'sealedfile': opens the file with the secret; true when it opened. */
-    val check: (suspend (String) -> Boolean)? = null,
+    /** 'sealedfile': opens the file with the secret (and whether it is the recovery code); true when it opened. */
+    val check: (suspend (String, Boolean) -> Boolean)? = null,
     val pendingType: String? = null,
 ) {
     var stage by mutableStateOf(stage)
@@ -126,15 +132,20 @@ class LockSession(
     var msg by mutableStateOf(msg)
     var failed by mutableStateOf(false)
     var busy by mutableStateOf(false)
+    /** Waiting after too many wrong tries (ms left when last counted); nothing can be typed meanwhile. */
+    var waitMs by mutableLongStateOf(0L)
+    val blocked: Boolean get() = busy || waitMs > 0
     /** Bumped to clear what was typed; [shake] to shake the box. */
     var clearTick by mutableIntStateOf(0)
     var shake by mutableIntStateOf(0)
     var firstSecret = ""
+    /** 'bioconfirm': the PIN's key, for the fingerprint copy. */
+    var copyKey: ByteArray? = null
     val result = CompletableDeferred<Boolean>()
 
     val autoLen: Int get() = when (stage) {
-        "privconfirm" -> Crypto.pinLen
-        "open", "sealedfile" -> n(env?.get("l")).toInt()
+        "privconfirm" -> if (type == LockRules.RECOVERY) 0 else Crypto.pinLen
+        "open", "sealedfile" -> if (type == LockRules.RECOVERY) 0 else n(env?.get("l")).toInt()
         else -> 0
     }
 
@@ -169,14 +180,26 @@ object LockFlow {
         return run(LockSession("new1", target, ti, m, true))
     }
 
+    /**
+     * A new PIN, pattern or password for this phone without asking the old one: after the book was opened with its recovery code
+     * (a forgotten PIN, or a backup from another phone, where the old PIN cannot work). The data key and the code stay.
+     */
+    suspend fun pickNew(target: String, why: String? = null): Boolean {
+        if (!Crypto.locked) return false
+        val (ti, m) = setupCopy(target, true)
+        return run(LockSession("new1", target, ti, why ?: m, true, pendingType = target))
+    }
+
     /** enableBioUnlock(): the lock first, then the fingerprint. */
     suspend fun enableBio(): Boolean {
         val act = MainActivity.current ?: return false
         if (!Crypto.locked) { Dialogs.tell(t("lock.setLockFirst", "Set a lock first.")); return false }
         if (!Bio.available(act)) { Dialogs.tell(t("lock.err.noFingerprint", "no fingerprint is set up on this phone.")); return false }
         val (ti, _) = confirmCopy(Crypto.type)
-        if (!run(LockSession("bioconfirm", Crypto.type, ti, t("lock.forBio", "To set up fingerprint unlock."), true))) return false
-        val r = Bio.enable(act)
+        val s = LockSession("bioconfirm", Crypto.type, ti, t("lock.forBio", "To set up fingerprint unlock."), true)
+        if (!run(s)) return false
+        val pinKey = s.copyKey ?: return false
+        val r = Bio.enable(act, pinKey)
         if (r.isSuccess) { Dialogs.tell(t("lock.bioOnAlert", "Fingerprint unlock is on — try it next time you open the app.")); Ledger.bump(); return true }
         val e = r.exceptionOrNull()
         val why = when ((e as? Bio.Failure)?.name) {
@@ -201,7 +224,7 @@ object LockFlow {
             if (act != null && PhoneLock.fits(Crypto.salt)) {
                 val here = obj("s" to Crypto.b64(Crypto.salt!!))
                 when (val r = PhoneLock.unlockKey(act, here, t("phonelock.confirm", "Confirm it's you"))) {
-                    is PhoneSeal.Outcome.Ok -> if (r.bytes.contentEquals(Crypto.key)) return true
+                    is PhoneSeal.Outcome.Ok -> if (Crypto.checkCopyKey(r.bytes)) return true
                     PhoneSeal.Outcome.Cancelled -> return false
                     else -> Unit
                 }
@@ -213,8 +236,8 @@ object LockFlow {
         return run(LockSession("privconfirm", Crypto.type, ti, why ?: t("lock.forPrivate", "To show private items."), true))
     }
 
-    /** The 'sealedfile' stage: asks for the lock a file was sealed with; [open] tries it. */
-    suspend fun askSealed(env: Obj, open: suspend (String) -> Boolean): Boolean {
+    /** The 'sealedfile' stage: asks for the lock a file was sealed with; [open] tries it (the secret, and whether it is the recovery code). */
+    suspend fun askSealed(env: Obj, open: suspend (String, Boolean) -> Boolean): Boolean {
         val type = env.s("t").ifEmpty { "pin" }
         if (type == LockRules.PHONE) {
             // a backup made with the phone's lock opens with its recovery code (the phone's key never leaves that phone)
@@ -222,13 +245,32 @@ object LockFlow {
             val m = t("recovery.backupMsg", "This backup is locked with a recovery code: the 20 digits written down when the phone's lock was chosen.")
             return run(LockSession("sealedfile", LockRules.RECOVERY, ti, m, true, env = env, check = open))
         }
+        if (!Crypto.pinFits(env)) {
+            // Tally's own lock from another phone (or before Tally was installed again): its PIN works only where it was set
+            val ti = lockCopy(LockRules.RECOVERY).first
+            val m = t("recovery.backupOther", "This backup was made on another phone. Enter its recovery code: the 20 digits written down when its lock was set.")
+            return run(LockSession("sealedfile", LockRules.RECOVERY, ti, m, true, env = env, check = open))
+        }
         val (ti, m) = lockCopy(type)
         return run(LockSession("sealedfile", type, ti, m, true, env = env, check = open))
+    }
+
+    /** A stage that checks a secret against a seal: it counts wrong tries and waits after too many ([Attempts]). */
+    private fun gated(stage: String) = stage in setOf("open", "sealedfile", "confirmchange", "bioconfirm", "privconfirm")
+
+    /** A wrong try: says so, and when it starts a wait, how long. */
+    private fun wrong(s: LockSession) {
+        val w = lockGate.failed(Clock.millis())
+        if (w > 0) { s.waitMs = w; s.fail(wrongMsg(s.type) + " " + waitMsg(w)) } else s.fail(wrongMsg(s.type))
     }
 
     /** submitSecret(): where the PIN pad, the pattern and the password all end up. */
     suspend fun submit(s: LockSession, typed: String) {
         if (s.busy) return
+        if (gated(s.stage)) {
+            val w = lockGate.remaining(Clock.millis())
+            if (w > 0) { s.waitMs = w; s.msg = waitMsg(w); s.failed = true; s.clearTick++; return }
+        }
         val secret = LockRules.secretFor(s.type, typed)
         if (secret.length < LockRules.minLength(s.type)) return s.fail(when (s.type) {
             LockRules.RECOVERY -> t("recovery.twenty", "The recovery code has 20 digits.")
@@ -236,6 +278,7 @@ object LockFlow {
             "pattern" -> t("lock.connectFour", "Connect at least four dots.")
             else -> t("lock.fourDigits", "At least four digits.")
         })
+        val viaCode = s.type == LockRules.RECOVERY
         when (s.stage) {
             "new1" -> {
                 s.firstSecret = secret; s.clearTick++
@@ -249,46 +292,50 @@ object LockFlow {
                     return s.fail(t("lock.mismatch", "They didn't match. Start again."))
                 }
                 s.busy = true; s.say(t("lock.checking", "Checking…"))
-                withContext(Dispatchers.Default) { Crypto.setLock(secret, s.type) }
-                DB["lockType"] = s.type
-                DB.remove("recoveryCode")   // only the phone's lock has one
-                Bio.disable()   // the old copy held the previous lock
-                Ledger.persist()
-                PhoneLock.disable()   // after the new seal is on disk: until then the recovery code still opens the old one
-                lockChanged()
-                Ledger.bump()
+                val ok = LockModes.applyOwn(secret, s.type)
                 s.busy = false
-                s.finish(true)
+                s.finish(ok)
             }
             "confirmchange", "bioconfirm", "privconfirm" -> {
                 s.busy = true; s.say(t("lock.checking", "Checking…"))
-                val ok = verifySecret(secret)
+                val k = verifySecret(secret, viaCode)
                 s.busy = false
-                if (!ok) return s.fail(wrongMsg(s.type))
-                if (s.stage == "confirmchange") {
-                    val next = s.pendingType ?: Crypto.type
-                    val (ti, m) = setupCopy(next, true)
-                    s.type = next; s.stage = "new1"; s.title = ti; s.say(m); s.clearTick++
-                } else s.finish(true)
+                if (k == null) return wrong(s)
+                lockGate.succeeded()
+                when (s.stage) {
+                    "confirmchange" -> {
+                        val next = s.pendingType ?: Crypto.type
+                        val (ti, m) = setupCopy(next, true)
+                        s.type = next; s.stage = "new1"; s.title = ti; s.say(m); s.clearTick++
+                    }
+                    "bioconfirm" -> { s.copyKey = k; s.finish(true) }
+                    else -> s.finish(true)
+                }
             }
             "sealedfile" -> {
                 s.busy = true; s.say(t("lock.checking", "Checking…"))
-                val ok = runCatching { s.check?.invoke(secret) == true }.getOrDefault(false)
+                val ok = runCatching { s.check?.invoke(secret, viaCode || s.env?.s("t") == LockRules.PHONE) == true }.getOrDefault(false)
                 s.busy = false
-                if (ok) s.finish(true) else s.fail(wrongMsg(s.type))
+                if (ok) { lockGate.succeeded(); s.finish(true) } else wrong(s)
             }
             else -> {   // 'open'
                 s.busy = true; s.say(t("lock.checking", "Checking…"))
-                val ok = Ledger.unlock(secret)
+                val ok = Ledger.unlock(secret, viaCode)
                 s.busy = false
                 if (ok) {
+                    lockGate.succeeded()
                     s.finish(true)
-                    // opened with the recovery code: offer to set the phone's prompt up again (or say why it can't be)
-                    if (s.type == LockRules.RECOVERY) MainScope().launch { delay(400); LockModes.afterRecoveryUnlock() }
-                } else s.fail(wrongMsg(s.type))
+                    afterOpen(viaCode)
+                } else wrong(s)
             }
         }
     }
+
+    /**
+     * After the book opened: a recovery code made by the update is shown; opened with the recovery code, the phone's prompt is
+     * set up again, or (Tally's own lock) a new PIN is offered.
+     */
+    fun afterOpen(viaCode: Boolean) { MainScope().launch { delay(400); LockModes.afterUnlock(viaCode) } }
 
     /** tryBioUnlock(): the fingerprint opens the sealed ledger with the stored key; anything else falls back to the lock. */
     suspend fun tryBio(s: LockSession, auto: Boolean) {
@@ -304,7 +351,7 @@ object LockFlow {
                 s.busy = true
                 val ok = runCatching { Ledger.unlockWithKey(Crypto.unb64(c.s("k"))) }.getOrDefault(false)
                 s.busy = false
-                if (ok) { s.finish(true); return }
+                if (ok) { lockGate.succeeded(); s.finish(true); afterOpen(false); return }
             }
             // the lock changed since (or a restore): the fingerprint copy no longer fits
             s.fail(t("lock.bioFail", "Fingerprint did not work — enter your {what} instead.", "what" to typeNoun(s.type)))
@@ -329,7 +376,7 @@ suspend fun LockFlow.tryPhone(s: LockSession) {
             s.busy = true
             val ok = runCatching { Ledger.unlockWithKey(r.bytes) }.getOrDefault(false)
             s.busy = false
-            if (ok) s.finish(true) else { PhoneLock.disable(); toRecovery(s, phoneGoneMsg()) }
+            if (ok) { lockGate.succeeded(); s.finish(true); LockFlow.afterOpen(false) } else { PhoneLock.disable(); toRecovery(s, phoneGoneMsg()) }
         }
         PhoneSeal.Outcome.Cancelled -> s.say(t("phonelock.tapToTry", "Tap Try again to unlock."))
         PhoneSeal.Outcome.Gone -> toRecovery(s, phoneGoneMsg())
@@ -359,6 +406,8 @@ fun LockScreen() {
         LockSession("open", type, ti, m, false, env = env).also {
             // the phone's lock with no copy of the key on this phone (screen lock removed, a restore): straight to the code
             if (type == LockRules.PHONE && !PhoneLock.fits(env?.s("s")?.let { s -> runCatching { Crypto.unb64(s) }.getOrNull() })) toRecovery(it, phoneGoneMsg())
+            // Tally's own lock whose PIN cannot work on this phone (a book from another phone): straight to the code
+            else if (env != null && !Crypto.pinFits(env)) toRecovery(it, t("lock.pinGone", "Your {what} can't open Tally on this phone. Enter your recovery code.", "what" to typeNoun(type)))
         }
     }
     val scope = rememberCoroutineScope()
@@ -394,6 +443,15 @@ private fun LockBody(s: LockSession, onSubmit: (String) -> Unit, onBio: (() -> U
         if (s.shake == 0) return@LaunchedEffect
         haptics.reject()
         if (!calm) { shakeX.snapTo(22f); shakeX.animateTo(0f, Motion.bouncy()) }    // after the gesture: a little overshoot is allowed
+    }
+    // after too many wrong tries: the wait counts down here and nothing can be typed until it ends (it survives a restart)
+    LaunchedEffect(s) { if (s.stage != "new1" && s.stage != "new2") lockGate.remaining(Clock.millis()).let { if (it > 0) { s.waitMs = it; s.msg = waitMsg(it); s.failed = true } } }
+    LaunchedEffect(s.waitMs > 0) {
+        while (s.waitMs > 0) {
+            delay(1000)
+            val left = lockGate.remaining(Clock.millis())
+            if (left <= 0) { s.waitMs = 0; s.say(t("lock.tryNow", "You can try again now.")) } else { s.waitMs = left; s.msg = waitMsg(left); s.failed = true }
+        }
     }
     val c = Apple.colors
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -432,6 +490,17 @@ private fun LockBody(s: LockSession, onSubmit: (String) -> Unit, onBio: (() -> U
             }
             if (onBio != null && s.stage == "open" && s.type != LockRules.PHONE && s.type != LockRules.RECOVERY && Bio.on()) {
                 PlainButton(t("lock.useFingerprint", "Use fingerprint"), onBio, enabled = !s.busy, icon = Icons.Rounded.Fingerprint, bold = true)
+            }
+            // Tally's own lock (sealed the new way): a forgotten PIN is not the end; the recovery code opens the book too
+            val env = s.env
+            if (env != null && (s.stage == "open" || s.stage == "sealedfile") && Crypto.version(env) >= Crypto.VERSION && env.s("t") != LockRules.PHONE) {
+                val own = env.s("t").ifEmpty { "pin" }
+                if (s.type != LockRules.RECOVERY) PlainButton(t("recovery.forgot", "Forgot your {what}? Use recovery code", "what" to typeNoun(own)), {
+                    s.type = LockRules.RECOVERY; s.title = lockCopy(LockRules.RECOVERY).first; s.say(t("recovery.msgOwn", "The 20 digits you wrote down when you set the lock."))
+                }, enabled = !s.busy)
+                else if (Crypto.pinFits(env)) PlainButton(t("recovery.usePin", "Use your {what}", "what" to typeNoun(own)), {
+                    s.type = own; s.title = lockCopy(own).first; s.say(lockCopy(own).second)
+                }, enabled = !s.busy)
             }
             if (s.skippable && onSkip != null) {
                 PlainButton(if (s.stage == "new1" && s.pendingType == null) t("lock.skip", "Skip for now") else t("lock.cancel", "Cancel"), onSkip)
@@ -477,7 +546,7 @@ private fun PinPad(s: LockSession, onSubmit: (String) -> Unit) {
                     Box(
                         Modifier.size(if (LocalEasy.current) 84.dp else 76.dp).clip(CircleShape)
                             .background(if (alt) Color.Transparent else c.fill)
-                            .pressable(enabled = !s.busy, scaleTo = 0.9f, highlight = false, onLongClick = if (k == "x") ({ entry = "" }) else null) { press(k) },
+                            .pressable(enabled = !s.blocked, scaleTo = 0.9f, highlight = false, onLongClick = if (k == "x") ({ entry = "" }) else null) { press(k) },
                         contentAlignment = Alignment.Center,
                     ) {
                         when (k) {
@@ -505,8 +574,8 @@ private fun PatternGrid(s: LockSession, onSubmit: (String) -> Unit) {
         val sizePx = constraints.maxWidth.toFloat()
         fun center(i: Int) = Offset(sizePx / 6f * (1 + 2 * (i % 3)), sizePx / 6f * (1 + 2 * (i / 3)))
         fun hit(p: Offset): Int { for (i in 0 until 9) { val c = center(i); if (hypot(c.x - p.x, c.y - p.y) < sizePx / 9f) return i }; return -1 }
-        Canvas(Modifier.fillMaxSize().pointerInput(s.clearTick, s.busy) {
-            if (s.busy) return@pointerInput
+        Canvas(Modifier.fillMaxSize().pointerInput(s.clearTick, s.blocked) {
+            if (s.blocked) return@pointerInput
             detectDragGestures(
                 onDragStart = { p -> path.clear(); val i = hit(p); if (i >= 0) { path.add(i); haptics.tick() }; finger = p },
                 onDrag = { ch, _ -> val p = ch.position; finger = p; val i = hit(p); if (i >= 0 && i !in path) { path.add(i); haptics.tick() } },
@@ -549,7 +618,7 @@ private fun PasswordBox(s: LockSession, onSubmit: (String) -> Unit) {
         )
     }
     Spacer(Modifier.height(Space.l))
-    PrimaryButton(t("lock.continue", "Continue"), { onSubmit(text) }, Modifier.widthIn(min = 160.dp), enabled = !s.busy)
+    PrimaryButton(t("lock.continue", "Continue"), { onSubmit(text) }, Modifier.widthIn(min = 160.dp), enabled = !s.blocked)
 }
 
 /** The recovery code: 20 digits from paper, shown as typed (it is read off the paper), counted as they go. */
@@ -573,5 +642,5 @@ private fun RecoveryBox(s: LockSession, onSubmit: (String) -> Unit) {
         )
     }
     Spacer(Modifier.height(Space.l))
-    PrimaryButton(t("lock.continue", "Continue"), { onSubmit(text) }, Modifier.widthIn(min = 160.dp), enabled = !s.busy && got == RecoveryCode.DIGITS)
+    PrimaryButton(t("lock.continue", "Continue"), { onSubmit(text) }, Modifier.widthIn(min = 160.dp), enabled = !s.blocked && got == RecoveryCode.DIGITS)
 }

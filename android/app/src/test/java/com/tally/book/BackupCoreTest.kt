@@ -162,10 +162,12 @@ class BackupCoreTest {
 
     // ---------- plain and sealed ----------
 
-    @Test fun sealedBackupRestoresOnAFreshPhoneWithThePinAlone() {
-        // a locked phone: the book sealed with the PIN, the files sealed with DB.filesKey, which lives inside the sealed book
+    @Test fun sealedBackupRestoresWithThePinHereAndOnlyWithTheRecoveryCodeOnAFreshPhone() {
+        // a locked phone: the book sealed under a data key (the PIN's copy bound to this phone, the recovery code's copy anywhere),
+        // the files sealed with DB.filesKey, which lives inside the sealed book
         val a = place("a")
-        Crypto.setLock("2468", "pin")
+        val code = RecoveryCode.make()
+        Crypto.setLock("2468", "pin", code)
         val filesKey = Crypto.randomBytes(32)
         val db = book("l1").apply { this["filesKey"] = Crypto.b64(filesKey); this["lockType"] = "pin" }
         a.book.writeText(JsonCodec.stringify(Crypto.sealText(JsonCodec.stringify(db))))
@@ -174,15 +176,24 @@ class BackupCoreTest {
         File(a.filesDir, "f1.bin").writeBytes(Crypto.encrypt(filesKey, iv, photo, "tally-file:f1".toByteArray()))
         File(a.filesDir, "f1.json").writeText(JsonCodec.stringify(obj("id" to "f1", "enc" to 1, "iv" to Crypto.b64(iv), "ts" to 1, "mime" to "", "size" to 1)))
         val file = backup(a)
-        Crypto.clearLock()      // a new phone knows nothing
-
+        Crypto.clearLock()
         val c = BackupCore.check(file)
-        assertTrue(c.sealed)
-        assertNull(c.manifest["counts"])                                   // nothing readable outside the seal
-        assertFalse(String(file.readBytes(), Charsets.ISO_8859_1).contains("Loan l1"))
-        assertNull(Crypto.openEnvelope(c.envelope!!, "1357"))             // a wrong PIN opens nothing
-        assertFalse(Crypto.locked)                                         // and changes nothing
-        val opened = Crypto.openEnvelope(c.envelope!!, "2468")!!
+        assertNotNull(Crypto.openEnvelope(c.envelope!!, "2468"))           // the phone that made it: its PIN opens it
+        val home = Crypto.device
+        Crypto.device = MemoryDevice()                                     // a new phone knows nothing
+        try {
+            assertTrue(c.sealed)
+            assertNull(c.manifest["counts"])                                   // nothing readable outside the seal
+            assertFalse(String(file.readBytes(), Charsets.ISO_8859_1).contains("Loan l1"))
+            assertNull(Crypto.openEnvelope(c.envelope!!, "1357"))             // a wrong PIN opens nothing
+            assertNull(Crypto.openEnvelope(c.envelope!!, "2468"))             // and neither does the right one, off that phone
+            assertFalse(Crypto.pinFits(c.envelope!!))
+            assertFalse(Crypto.locked)                                         // and changes nothing
+            checkOpened(file, c, a, photo, Crypto.openEnvelope(c.envelope!!, code, viaCode = true)!!)
+        } finally { Crypto.device = home }
+    }
+
+    private fun checkOpened(file: File, c: BackupCore.Checked, a: BackupPlace, photo: ByteArray, opened: Crypto.Opened) {
         assertEquals(4, opened.pinLen); assertEquals("pin", opened.type)
         val back = JsonCodec.parseObj(opened.text)
         assertEquals("Loan l1", back.objs("loans")[0].s("name"))

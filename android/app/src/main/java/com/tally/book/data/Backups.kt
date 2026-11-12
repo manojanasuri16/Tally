@@ -282,6 +282,101 @@ object Backups {
 
     /** Forgets the "before restore" copy (after it was put back). */
     fun dropSafety() { runCatching { place().safety.delete() }; refresh() }
+
+    // ---------- sealing older copies again after a lock change (L3, data/BackupReseal.kt) ----------
+
+    /** The backup made for the share sheet (cache/backup): gone after a lock change; the next Back up now makes a sealed one. */
+    fun clearShareCache() { runCatching { File(app.cacheDir, "backup").deleteRecursively() } }
+
+    private fun scratch(): File = File(app.cacheDir, "reseal").apply { deleteRecursively(); mkdirs() }
+
+    /** Copies a folder file into [dest] (at most a backup's size); false when it cannot be read. */
+    private fun copyIn(uri: Uri, dest: File): Boolean = runCatching {
+        (app.contentResolver.openInputStream(uri) ?: return false).use { input ->
+            dest.outputStream().use { out ->
+                val buf = ByteArray(64 * 1024); var total = 0L
+                while (true) {
+                    val r = input.read(buf); if (r < 0) break
+                    total += r; if (total > BackupFormat.MAX_TOTAL) return false
+                    out.write(buf, 0, r)
+                }
+            }
+        }
+        true
+    }.getOrDefault(false)
+
+    /**
+     * Tally's backups in the chosen folder that [pick] would seal again (it gives the plain book text, or null to leave one
+     * alone), as (name, uri, was plain). Empty when there is no folder or it cannot be read.
+     */
+    suspend fun folderToReseal(pick: (BackupCore.Checked) -> String?): List<Triple<String, Uri, Boolean>> = running.withLock {
+        withContext(Dispatchers.IO) {
+            val tree = tree() ?: return@withContext emptyList()
+            if (!isOn() || !permitted(tree)) return@withContext emptyList()
+            val kids = runCatching { children(tree) }.getOrNull() ?: return@withContext emptyList()
+            val dir = scratch()
+            val out = ArrayList<Triple<String, Uri, Boolean>>()
+            for ((name, uri) in kids) {
+                if (BackupFormat.dayOf(name) == null) continue
+                val f = File(dir, "in" + BackupFormat.EXT)
+                if (!copyIn(uri, f)) continue
+                val c = runCatching { BackupCore.check(f) }.getOrNull() ?: continue
+                if (pick(c) != null) out.add(Triple(name, uri, !c.sealed))
+                f.delete()
+            }
+            dir.deleteRecursively()
+            out
+        }
+    }
+
+    /** Rewrites those folder backups sealed ([sealBook] seals a book's text); each is replaced only by a copy that checks out. Returns how many. */
+    suspend fun resealFolder(list: List<Triple<String, Uri, Boolean>>, pick: (BackupCore.Checked) -> String?, sealBook: (String) -> ByteArray): Int = running.withLock {
+        withContext(Dispatchers.IO) {
+            val tree = tree() ?: return@withContext 0
+            if (!permitted(tree)) return@withContext 0
+            val cr = app.contentResolver
+            val dir = scratch()
+            var done = 0
+            for ((name, uri, _) in list) {
+                val src = File(dir, "in" + BackupFormat.EXT); val made = File(dir, "out" + BackupFormat.EXT)
+                try {
+                    if (!copyIn(uri, src)) continue
+                    val c = BackupCore.check(src)
+                    val text = pick(c) ?: continue
+                    made.outputStream().buffered(64 * 1024).use { o -> BackupCore.reseal(src, c, text, sealBook, o); o.flush() }
+                    if (!BackupCore.check(made).sealed) continue
+                    // written under a ".partial" name first, then the plain one is deleted and the new one takes its name
+                    val tmp = DocumentsContract.createDocument(cr, folderDoc(tree), MIME, "$name.partial") ?: continue
+                    val ok = runCatching { (cr.openOutputStream(tmp, "w") ?: error("out")).use { o -> made.inputStream().use { it.copyTo(o, 64 * 1024) } } }.isSuccess
+                    if (!ok) { delete(tmp); continue }
+                    delete(uri)
+                    if (runCatching { DocumentsContract.renameDocument(cr, tmp, name) }.getOrNull() == null) {
+                        val direct = runCatching { DocumentsContract.createDocument(cr, folderDoc(tree), MIME, name) }.getOrNull()
+                        val wrote = direct != null && runCatching { cr.openOutputStream(direct, "w")!!.use { o -> made.inputStream().use { it.copyTo(o, 64 * 1024) } } }.isSuccess
+                        if (wrote) delete(tmp) else direct?.let { delete(it) }
+                    }
+                    done++
+                } catch (e: Exception) { /* left as it was */ } finally { src.delete(); made.delete() }
+            }
+            dir.deleteRecursively()
+            done
+        }
+    }
+
+    /** The restore safety copy sealed again, silently (it never leaves the phone, but it holds the whole book). True when rewritten. */
+    suspend fun resealSafety(pick: (BackupCore.Checked) -> String?, sealBook: (String) -> ByteArray): Boolean = running.withLock {
+        withContext(Dispatchers.IO) {
+            val safety = place().safety
+            if (!safety.isFile) return@withContext false
+            val made = File(safety.path + ".reseal")
+            runCatching {
+                val c = BackupCore.check(safety)
+                val text = pick(c) ?: return@runCatching false
+                made.outputStream().buffered(64 * 1024).use { o -> BackupCore.reseal(safety, c, text, sealBook, o); o.flush() }
+                BackupCore.check(made).sealed && made.renameTo(safety)
+            }.getOrDefault(false).also { made.delete() }
+        }
+    }
 }
 
 /** The daily backup job (and the catch-up). It never retries on its own: the next day, or the next app open, tries again. */

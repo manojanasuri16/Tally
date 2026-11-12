@@ -89,27 +89,44 @@ object Ledger {
         else start(raw)
     }
 
-    /** Opens a sealed ledger with the lock. False on a wrong PIN/pattern/password. */
-    suspend fun unlock(secret: String): Boolean {
+    /** Opens a sealed ledger with the lock (or, with [viaCode], its recovery code). False on a wrong secret. */
+    suspend fun unlock(secret: String, viaCode: Boolean = false): Boolean {
         val env = sealed ?: return false
-        val data = withContext(Dispatchers.Default) { runCatching { Crypto.unseal(env, secret) }.getOrNull() } ?: return false
-        start(data.asObj()); return true
+        val o = withContext(Dispatchers.Default) { Crypto.openEnvelope(env, secret, viaCode) } ?: return false
+        return open(o)
     }
 
-    suspend fun unlockWithKey(keyBytes: ByteArray): Boolean {
+    /** Opens it with a device copy's key (fingerprint, the phone's lock). */
+    suspend fun unlockWithKey(copyKey: ByteArray): Boolean {
         val env = sealed ?: return false
-        val data = withContext(Dispatchers.Default) { runCatching { Crypto.unsealWithKey(env, keyBytes) }.getOrNull() } ?: return false
-        start(data.asObj()); return true
+        val o = withContext(Dispatchers.Default) { Crypto.openEnvelopeWithKey(env, copyKey) } ?: return false
+        return open(o)
     }
 
-    /** Checks a secret against the stored envelope without changing anything (Settings: confirm it's you). */
-    suspend fun verify(secret: String): Boolean {
-        val raw = withContext(Dispatchers.IO) { readRaw() } ?: return false
-        if (!raw.b("enc")) return false
-        val keep = arrayOf<Any?>(Crypto.key, Crypto.salt, Crypto.type, Crypto.pinLen)
-        return withContext(Dispatchers.Default) { runCatching { Crypto.unseal(raw, secret); true }.getOrDefault(false) }.also {
-            Crypto.key = keep[0] as ByteArray?; Crypto.salt = keep[1] as ByteArray?; Crypto.type = keep[2] as String; Crypto.pinLen = keep[3] as Int
+    /** Set when the first unlock after the update re-sealed a version 1 book and made it a recovery code that was not shown yet. */
+    const val NEW_CODE = "tally-recovery-new"
+
+    /**
+     * Starts an opened book. A book sealed the old way (version 1, Tally 0.5 and before) is re-sealed now under a random data key
+     * (Crypto.upgrade): Tally's own lock gets a new recovery code, kept in the book and shown to the person after this unlock
+     * ([NEW_CODE]); the phone's lock keeps its code. The book is written at once, before anything else can change it.
+     */
+    private suspend fun open(o: Crypto.Opened): Boolean {
+        val data = runCatching { JsonCodec.parseObj(o.text) }.getOrNull() ?: return false
+        if (o.legacy) {
+            val code = if (o.type == LockRules.PHONE) null else RecoveryCode.make()
+            val up = withContext(Dispatchers.Default) { runCatching { Crypto.upgrade(o, code) }.getOrNull() } ?: return false
+            Crypto.adopt(up)
+            Crypto.remember(o.key)      // older backups sealed the old way open with it, to be sealed again (Backups.resealOlder)
+            if (code != null) { data["recoveryCode"] = code; DevicePrefs.set(NEW_CODE, "1") }
+            start(data)
+            persist()
+            lockChanged()
+        } else {
+            Crypto.adopt(o)
+            start(data)
         }
+        return true
     }
 
     /** Puts a book in memory: merges what was saved over a fresh one, fills any missing shape, and goes READY. */
@@ -176,14 +193,20 @@ object Ledger {
         return ok
     }
 
-    /** Leaves the ledger in memory but asks for the lock again (re-lock after time away). */
+    /**
+     * Asks for the lock again (re-lock after time away): the book is written, dropped from memory, the data key is zeroed and
+     * forgotten (Crypto.forget), and a document copy handed to a viewer is deleted.
+     */
     fun relock() {
         if (!Crypto.locked || _phase.value != Phase.READY || frozen) return
         persistBlocking()
         sealed = readRaw()
         if (sealed?.b("enc") == true) {
+            saveJob?.cancel()
             DB = freshDb()
             _phase.value = Phase.LOCKED
+            Crypto.forget()
+            FileStore.clearViewCopy()
             bump()
         }
     }

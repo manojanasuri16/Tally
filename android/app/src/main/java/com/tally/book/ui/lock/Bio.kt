@@ -25,8 +25,9 @@ import kotlin.coroutines.resume
  * finishEnableBio / tryBioUnlock / bioFastUnlock). The web app keeps the lock's key bytes and their
  * salt sealed under a key only a fingerprint opens (bioEnvelope.k); here that key is an AES-GCM key
  * in the Android Keystore that can only be used right after a strong biometric check and is
- * invalidated when the phone's fingerprints change. What it seals is { s: salt, k: lock key, t, l },
- * so a fingerprint unlock goes straight to Ledger.unlockWithKey() without the 150k-round PBKDF2.
+ * invalidated when the phone's fingerprints change. What it seals is { s: salt, k: the PIN's PBKDF2 key, t, l } (data/Crypto.kt:
+ * the PIN's key still needs this phone's own secret to open the book), so a fingerprint unlock goes straight to
+ * Ledger.unlockWithKey() without the 150k-round PBKDF2.
  * A salt that no longer matches the stored envelope (the lock changed, a restore) falls back to the lock.
  */
 object Bio {
@@ -59,9 +60,10 @@ object Bio {
         runCatching { ks.deleteEntry(ALIAS) }
     }
 
-    /** finishEnableBio(): seals the current lock's key under a new fingerprint key (one prompt). */
-    suspend fun enable(act: FragmentActivity): Result<Unit> {
-        val key = Crypto.key ?: return Result.failure(Failure("NoLock", t("lock.setLockFirst", "Set a lock first.")))
+    /** finishEnableBio(): seals the PIN's key ([pinKey], from the check just made) under a new fingerprint key (one prompt). */
+    suspend fun enable(act: FragmentActivity, pinKey: ByteArray): Result<Unit> {
+        if (!Crypto.locked) return Result.failure(Failure("NoLock", t("lock.setLockFirst", "Set a lock first.")))
+        val key = pinKey
         when (BiometricManager.from(act).canAuthenticate(BIOMETRIC_STRONG)) {
             BiometricManager.BIOMETRIC_SUCCESS -> Unit
             else -> return Result.failure(Failure("NotSupportedError", t("lock.err.noFingerprint", "no fingerprint is set up on this phone.")))

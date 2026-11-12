@@ -171,6 +171,84 @@ object BackupCore {
         } finally { tmp.delete() }
     }
 
+    // ---------- sealing an older backup again (L3) ----------
+
+    /**
+     * The book of an older backup as plain JSON, when it should be sealed again under the current lock: a plain backup, or one
+     * sealed by an earlier lock of this book that [openKnown] can still open (a version 1 seal, an earlier PIN). Null when it is
+     * already sealed by the current lock ([currentId], the envelope's `s`) or by a lock this phone does not know.
+     */
+    fun resealText(checked: Checked, currentId: String?, openKnown: (Obj) -> String?): String? {
+        if (!checked.sealed) return String(checked.book, Charsets.UTF_8)
+        val env = checked.envelope ?: return null
+        if (Crypto.version(env) >= Crypto.VERSION && currentId != null && env.s("s") == currentId) return null
+        return openKnown(env)?.takeIf { isBook(runCatching { JsonCodec.parseObj(it) }.getOrNull()) }
+    }
+
+    /**
+     * Writes the checked backup [checked] (from [file]) again to [out] with [bookText] (its book as plain JSON) sealed by
+     * [sealBook]. Files stored plain are sealed under the book's files key (made, and put in the book, when it has none), as
+     * FileStore seals them (AES-GCM, the file id as additional data); files already sealed are copied byte for byte. A file's
+     * bytes without their record are left out. The manifest keeps the backup's app, createdAt and date, so it is the same backup,
+     * now sealed. Returns the new manifest. [out] is not closed.
+     */
+    fun reseal(file: File, checked: Checked, bookText: String, sealBook: (String) -> ByteArray, out: OutputStream): Obj {
+        val book = JsonCodec.parseObj(bookText)
+        val names = checked.fileEntries.toSet()
+        val ids = names.map { it.removePrefix(BackupFormat.FILES).substringBeforeLast('.') }.distinct().sorted()
+        ZipFile(file).use { z ->
+            val metas = LinkedHashMap<String, Obj>()
+            for (id in ids) {
+                val m = "${BackupFormat.FILES}$id.json"
+                if (m in names) metas[id] = runCatching { JsonCodec.parseObj(String(read(z, m, BackupFormat.MAX_FILE), Charsets.UTF_8)) }.getOrElse { throw BackupError("damaged") }
+            }
+            var fk = book.s("filesKey").takeIf { it.isNotEmpty() }?.let { Crypto.unb64(it) }
+            if (fk == null && metas.values.any { !it.b("enc") }) {
+                fk = Crypto.randomBytes(32); book["filesKey"] = Crypto.b64(fk)
+            }
+            // the book's own file rows say which are sealed (FileStore keeps them in step too)
+            val nowSealed = metas.values.filter { !it.b("enc") }.map { it.s("id") }.toSet()
+            book.objs("files").forEach { if (it.s("id") in nowSealed) it["enc"] = true }
+
+            val entries = arr()
+            val zip = ZipOutputStream(out)
+            fun put(name: String, data: ByteArray) {
+                val crc = CRC32().apply { update(data) }
+                zip.putNextEntry(ZipEntry(name).apply { method = ZipEntry.STORED; size = data.size.toLong(); compressedSize = data.size.toLong(); this.crc = crc.value; time = checked.createdAt })
+                zip.write(data); zip.closeEntry()
+                entries.add(obj("name" to name, "size" to data.size, "sha256" to sha256Hex(data)))
+            }
+            put(BackupFormat.BOOK, sealBook(JsonCodec.stringify(book)))
+            for (id in ids) {
+                val meta = metas[id] ?: continue      // bytes without a record: not usable, and maybe plain: left out
+                val binName = "${BackupFormat.FILES}$id.bin"
+                val bin = if (binName in names) read(z, binName, BackupFormat.MAX_FILE) else null
+                if (meta.b("enc") || bin == null) {
+                    if (bin != null) put(binName, bin)
+                    put("${BackupFormat.FILES}$id.json", JsonCodec.stringify(meta).toByteArray(Charsets.UTF_8))
+                    continue
+                }
+                val iv = Crypto.randomBytes(12)
+                val ct = Crypto.encrypt(fk!!, iv, bin, "tally-file:${meta.s("id").ifEmpty { id }}".toByteArray(Charsets.UTF_8))
+                val m2 = meta.copyObj().apply { this["enc"] = 1; this["iv"] = Crypto.b64(iv); this["mime"] = ""; this["size"] = ct.size }
+                put(binName, ct)
+                put("${BackupFormat.FILES}$id.json", JsonCodec.stringify(m2).toByteArray(Charsets.UTF_8))
+            }
+            val manifest = obj(
+                "format" to BackupFormat.FORMAT, "version" to BackupFormat.VERSION, "app" to checked.manifest.s("app"),
+                "createdAt" to checked.manifest.num("createdAt"), "date" to checked.date, "sealed" to true,
+            )
+            checked.manifest["skipped"]?.let { manifest["skipped"] = it }
+            manifest["entries"] = entries
+            val mb = JsonCodec.stringify(manifest).toByteArray(Charsets.UTF_8)
+            val crc = CRC32().apply { update(mb) }
+            zip.putNextEntry(ZipEntry(BackupFormat.MANIFEST).apply { method = ZipEntry.STORED; size = mb.size.toLong(); compressedSize = mb.size.toLong(); this.crc = crc.value; time = checked.createdAt })
+            zip.write(mb); zip.closeEntry()
+            zip.finish(); zip.flush()
+            return manifest
+        }
+    }
+
     // ---------- checking ----------
 
     /** A backup that passed every check. [book] is book.json's bytes; [plain] the parsed book when not sealed, [envelope] when sealed. */

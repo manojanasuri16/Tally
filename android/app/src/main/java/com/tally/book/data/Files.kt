@@ -28,7 +28,19 @@ object FileStore {
     class Fail(val code: String) : Exception(code)
 
     private var dir: File? = null
-    fun init(ctx: Context) { dir = File(ctx.filesDir, "files").apply { mkdirs() } }
+    private var viewDir: File? = null
+    fun init(ctx: Context) {
+        dir = File(ctx.filesDir, "files").apply { mkdirs() }
+        viewDir = File(ctx.cacheDir, "shared")
+        clearViewCopy()
+    }
+
+    /**
+     * The plain copy of a document handed to a viewer (cache/shared, ui/loans/Attachments.kt) is deleted at start, when the app
+     * comes back from the viewer and when it locks again, so a sealed document never stays readable at rest. The cache is
+     * never in a backup (BackupCore copies only the book and filesDir/files; allowBackup is off).
+     */
+    fun clearViewCopy() { runCatching { viewDir?.listFiles()?.forEach { it.delete() } } }
     /** The folder the records live in (a backup copies it, a restore replaces it). */
     val directory: File? get() = dir
 
@@ -268,12 +280,12 @@ object FileStore {
 
     /** filesAfterPersist(): called after every save and once at start; cheap when nothing needs doing. */
     fun filesAfterPersist() {
-        val k = Crypto.key
-        val kid = k?.let { Crypto.b64(it) }
-        if (k != null && sweptFor != kid) { sweptFor = kid; filesSyncEncryption(); return }
+        if (Ledger.phase.value != Ledger.Phase.READY) return     // locked again: nothing to compare with
+        val want = Crypto.locked
+        val kid = if (want) Crypto.salt?.let { Crypto.b64(it) } ?: "" else null
+        if (want && sweptFor != kid) { sweptFor = kid; filesSyncEncryption(); return }
         val list = filesAll()
         if (list.isEmpty() && !truthy(DB["filesKey"])) return
-        val want = k != null
         if (list.all { it.b("enc") == want } && (want || !truthy(DB["filesKey"]))) return
         filesSyncEncryption()
     }

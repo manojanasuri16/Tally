@@ -21,7 +21,10 @@ import androidx.lifecycle.lifecycleScope
 import com.tally.book.core.*
 import com.tally.book.data.Backups
 import com.tally.book.data.Crypto
+import com.tally.book.data.FileStore
 import com.tally.book.data.Ledger
+import com.tally.book.data.LockRules
+import com.tally.book.ui.lock.ScreenGuard
 import com.tally.book.model.DB
 import com.tally.book.model.UiHooks
 import com.tally.book.ui.TallyRoot
@@ -54,8 +57,15 @@ class MainActivity : FragmentActivity() {
         const val RELOCK_AFTER_MS = 60_000L
         var current: MainActivity? = null
             private set
-        /** Set just before the app opens a system picker or share sheet of its own, so coming back doesn't re-lock. */
-        @Volatile var holdLock = false
+        /**
+         * Set just before the app opens a system picker, share sheet, viewer, camera or prompt of its own, so coming back doesn't
+         * re-lock; honoured only for a short while (LockRules.relockOnReturn: [LockRules.HOLD_MS], or the re-lock delay if longer),
+         * so a viewer left open on a phone that was put down does not keep Tally open.
+         */
+        var holdLock: Boolean
+            get() = heldAt > 0
+            set(v) { heldAt = if (v) SystemClock.elapsedRealtime() else 0L }
+        @Volatile private var heldAt = 0L
         /** Intent extra: the screen to open (the join-request notification puts "family"). */
         const val EXTRA_OPEN = "tally-open"
         /** True while the app is on screen (between onStart and onStop); the payment reminder is not posted then. */
@@ -86,6 +96,9 @@ class MainActivity : FragmentActivity() {
             // the window behind the app and the system bars' icons follow the setting at once, not only the phone's mode
             val sysDark = isSystemInDarkTheme()
             LaunchedEffect(appearance.mode, sysDark) { applyChrome(appearance.mode) }
+            // no screenshots and a blank recents card while a lock is set or amounts are hidden (ui/lock/ScreenGuard.kt)
+            val secure = remember(rev, phase) { phase == Ledger.Phase.LOCKED || Crypto.locked || (phase == Ledger.Phase.READY && DB.b("hideAmounts")) }
+            LaunchedEffect(secure) { ScreenGuard.update(secure, false) }
             TallyTheme(appearance) { TallyRoot(); com.tally.book.ui.lock.LockOverlayHost() }
         }
     }
@@ -145,12 +158,15 @@ class MainActivity : FragmentActivity() {
     override fun onStart() {
         super.onStart()
         visible = true
-        val away = SystemClock.elapsedRealtime() - stoppedAt
+        val now = SystemClock.elapsedRealtime()
         // DB.lockDelay (seconds) mirrored to the device as "tally-relock-ms"
         val limit = DevicePrefs.get("tally-relock-ms")?.toLongOrNull() ?: (n(DB["lockDelay"]) * 1000).toLong()
-        // a file picker or share sheet the app itself opened is not "leaving the app"
-        val own = holdLock; holdLock = false
-        if (stoppedAt > 0 && Crypto.locked && away > limit && !own) Ledger.relock()
+        // a file picker or share sheet the app itself opened is not "leaving the app", for a short while (LockRules.HOLD_MS)
+        val held = heldAt; holdLock = false
+        if (Crypto.locked && LockRules.relockOnReturn(stoppedAt, now, limit, held)) Ledger.relock()
+        // back from a document viewer: its plain copy goes (L2)
+        if (stoppedAt > 0) FileStore.clearViewCopy()
+        ScreenGuard.apply()
         // daily backup: a job that a battery saver held back runs now; a folder that went away is noticed
         Backups.catchUp()
     }

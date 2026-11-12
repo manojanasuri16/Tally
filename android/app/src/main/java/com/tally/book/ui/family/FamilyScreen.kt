@@ -295,8 +295,8 @@ private fun LockGroup() {
         title = t("applock.title", "App lock"),
         footer = when (kind) {
             LockKind.OFF -> t("applock.help.choose", "Locks Tally with a PIN, a pattern, a password, or your phone's own lock.")
-            LockKind.OWN -> t("applock.help.own", "Tally asks for your {what} when you open it. Do not forget it: it cannot be found again.", "what" to typeNoun(type))
-            LockKind.PHONE -> t("applock.help.phone", "Keep the recovery code on paper. You need it to open a backup on a new phone, or if this phone's screen lock is ever removed.")
+            LockKind.OWN -> t("applock.help.ownCode", "Tally asks for your {what} when you open it. Keep the recovery code on paper: it opens Tally if you forget the {what}, and your backups on a new phone. Screenshots are off while the lock is on.", "what" to typeNoun(type))
+            LockKind.PHONE -> t("applock.help.phoneShots", "Keep the recovery code on paper. You need it to open a backup on a new phone, or if this phone's screen lock is ever removed. Screenshots are off while the lock is on.")
         },
     ) {
         item {
@@ -324,6 +324,7 @@ private fun LockGroup() {
                         icon = Icons.Rounded.Fingerprint,
                     )
                 } else item { NoteRow(t("applock.noFingerprint", "To unlock with a fingerprint, first add one in your phone's settings.")) }
+                item { ARow(t("recovery.show", "Show recovery code"), icon = Icons.Rounded.Key, chevron = true, onClick = { scope.launch { LockModes.showRecovery() } }) }
             }
             LockKind.PHONE -> {
                 item { NoteRow(t("applock.phoneNote", "Unlocks with your phone's screen lock or fingerprint")) }

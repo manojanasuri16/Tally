@@ -17,6 +17,9 @@ import com.tally.book.ui.theme.Apple
 import com.tally.book.ui.theme.LocalSemantic
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /*
@@ -30,11 +33,13 @@ object LockModes {
     class CodeSheet(val code: String, val setup: Boolean) { val result = CompletableDeferred<Boolean>() }
     val sheet = mutableStateOf<CodeSheet?>(null)
 
-    private suspend fun showCode(code: String, setup: Boolean): Boolean {
+    /** Shows [code] in its sheet (screenshots blocked while it is up); with [setup] it is typed back once. True when done. */
+    suspend fun showCode(code: String, setup: Boolean): Boolean {
         sheet.value?.result?.complete(false)
         val s = CodeSheet(code, setup)
+        ScreenGuard.hold()      // before the sheet's window opens, so it takes the flag too
         sheet.value = s
-        return try { s.result.await() } finally { if (sheet.value === s) sheet.value = null }
+        return try { s.result.await() } finally { if (sheet.value === s) sheet.value = null; ScreenGuard.release() }
     }
 
     fun kind(): LockKind = LockRules.kindOf(Crypto.locked, Crypto.type)
@@ -48,9 +53,81 @@ object LockModes {
         Crypto.clearLock(); Bio.disable()
         Ledger.persist()
         PhoneLock.disable()
+        DevicePrefs.remove(Ledger.NEW_CODE)
         lockChanged(); Ledger.bump()
         return true
     }
+
+    /**
+     * Tally's own lock with [secret] of [kind] (pin, pattern, password): a new lock, a change, or a switch from the phone's lock.
+     * A lock that already has a recovery code keeps it (and the data key); a first lock makes one, shows it and has it typed
+     * back before anything changes (cancelling there changes nothing). Called from the lock screen's last step.
+     */
+    suspend fun applyOwn(secret: String, kind: String): Boolean {
+        val had = DB.s("recoveryCode").takeIf { Crypto.locked && RecoveryCode.valid(it) }
+        val code = had ?: RecoveryCode.make().also {
+            if (!showCode(it, setup = true)) { Dialogs.snack(t("phonelock.notChanged", "Nothing was changed.")); return false }
+        }
+        val lock = withContext(Dispatchers.Default) { runCatching { Crypto.makeOwn(secret, kind, code) }.getOrNull() }
+            ?: run { Dialogs.tell(t("lock.setFailed", "The lock could not be set on this phone. Nothing was changed.")); return false }
+        Crypto.adopt(lock)
+        DB["lockType"] = kind
+        DB["recoveryCode"] = code
+        Bio.disable()   // the old copy held the previous lock
+        Ledger.persist()
+        PhoneLock.disable()   // after the new seal is on disk: until then the recovery code still opens the old one
+        DevicePrefs.remove(Ledger.NEW_CODE)
+        lockChanged()
+        Ledger.bump()
+        afterLockChange()
+        return true
+    }
+
+    /** After a lock was set or changed (also the update's re-seal): older plain or old-lock copies are sealed again (L3). */
+    fun afterLockChange() { MainScope().launch { delay(300); BackupReseal.afterLockChange() } }
+
+    /**
+     * After the book opened. The update made a recovery code (a book locked before 0.6): it is shown once and typed back (asked
+     * again at the next unlock until it is). Opened with the recovery code: the phone's lock is set up again, or for Tally's own
+     * lock a new PIN is offered (required when the PIN cannot work on this phone).
+     */
+    suspend fun afterUnlock(viaCode: Boolean) {
+        if (!Crypto.locked) return
+        if (DevicePrefs.get(Ledger.NEW_CODE) != null) {
+            val code = DB.s("recoveryCode")
+            if (RecoveryCode.valid(code)) {
+                Dialogs.tell(t("recovery.new.explain", "Tally now has a recovery code.\n\nIt opens Tally and your backups if you forget your {what}, and on a new phone. Write it on paper on the next screen.", "what" to typeNoun(Crypto.type)))
+                if (showCode(code, setup = true)) { DevicePrefs.remove(Ledger.NEW_CODE); Dialogs.snack(t("recovery.saved", "Keep the paper safe")) }
+            } else DevicePrefs.remove(Ledger.NEW_CODE)
+            afterLockChange()
+            return
+        }
+        if (!viaCode) return
+        if (kind() == LockKind.PHONE) { afterRecoveryUnlock(); return }
+        if (Crypto.currentPinFits()) {
+            if (Dialogs.ask(t("lock.newAfterCode", "Opened with the recovery code.\n\nChoose a new {what}?", "what" to typeNoun(Crypto.type)), t("lock.newAfterCode.ok", "Choose"))) LockFlow.pickNew(Crypto.type)
+        } else {
+            Dialogs.tell(t("lock.pickHere", "The {what} from your other phone does not work here. Choose the {what} Tally will ask for on this phone.", "what" to typeNoun(Crypto.type)))
+            LockFlow.pickNew(Crypto.type)
+        }
+    }
+
+    /**
+     * Before a backup leaves the phone for the first time under this lock: it opens on a new phone only with the recovery code,
+     * so the code is offered once more (behind the lock). Asked once per lock (a device-only note).
+     */
+    suspend fun beforeFirstSend() {
+        if (!Crypto.locked) return
+        val id = Crypto.salt?.let { Crypto.b64(it) } ?: return
+        if (DevicePrefs.get(SENT_UNDER) == id) return
+        val code = DB.s("recoveryCode")
+        if (RecoveryCode.valid(code)) {
+            val see = Dialogs.ask(t("recovery.beforeSend", "A backup opens on a new phone only with your recovery code.\n\nSee the code now, to check it is on your paper?"), t("recovery.see", "See the code"))
+            if (see && LockFlow.confirm(t("recovery.forShow", "To show the recovery code."), null)) showCode(code, setup = false)
+        }
+        DevicePrefs.set(SENT_UNDER, id)
+    }
+    private const val SENT_UNDER = "tally-recovery-sent-under"
 
     /** Tally's own lock of [type] (pin, pattern, password): set it, change it, or switch to it, confirming the current lock first. */
     suspend fun useOwn(type: String): Boolean = LockFlow.setOrChange(type)
@@ -70,16 +147,19 @@ object LockModes {
         val act = MainActivity.current ?: return false
         phoneUnavailable(PhoneLock.offer(act))?.let { Dialogs.tell(t("phonelock.cant", "The phone's lock can't be used here.") + "\n\n" + it); return false }
         if (kind() == LockKind.PHONE) return true
+        // Tally's own lock already has a recovery code: it stays the same (the paper the person has still works)
+        val had = DB.s("recoveryCode").takeIf { Crypto.locked && RecoveryCode.valid(it) }
         if (!Dialogs.ask(
-                t("phonelock.explain", "Use the phone's lock?\n\nTally will open with your phone's screen lock or fingerprint. You will also get a recovery code to write on paper. You need it to open a backup on a new phone, or if this phone's screen lock is ever removed."),
+                if (had != null) t("phonelock.explainKeep", "Use the phone's lock?\n\nTally will open with your phone's screen lock or fingerprint. Your recovery code stays the same.")
+                else t("phonelock.explain", "Use the phone's lock?\n\nTally will open with your phone's screen lock or fingerprint. You will also get a recovery code to write on paper. You need it to open a backup on a new phone, or if this phone's screen lock is ever removed."),
                 t("phonelock.continue", "Continue"),
             )) return false
         if (Crypto.locked && !LockFlow.confirm(t("lock.forChange", "To change the lock."), null)) return false
-        val code = RecoveryCode.make()
-        if (!showCode(code, setup = true)) return false
-        val salt = Crypto.randomBytes(16)
-        val key = withContext(Dispatchers.Default) { Crypto.deriveKeyBits(code, salt) }
-        when (val r = PhoneLock.enable(act, salt, key, t("phonelock.prompt.setup", "Use the phone's lock for Tally"))) {
+        val code = had ?: RecoveryCode.make()
+        if (had == null && !showCode(code, setup = true)) return false
+        val made = withContext(Dispatchers.Default) { Crypto.makePhone(code) }
+        val salt = made.lock.salt
+        when (val r = PhoneLock.enable(act, salt, made.copyKey, t("phonelock.prompt.setup", "Use the phone's lock for Tally"))) {
             is PhoneSeal.Outcome.Ok -> Unit
             PhoneSeal.Outcome.Cancelled -> { Dialogs.snack(t("phonelock.notChanged", "Nothing was changed.")); return false }
             else -> {
@@ -89,23 +169,25 @@ object LockModes {
             }
         }
         // from here the new lock is the lock: the book (and its files key) are sealed with it on the next write, right now
-        Crypto.adopt(Crypto.Opened(key, salt, LockRules.PHONE, 0, ""))
+        Crypto.adopt(made.lock)
         DB["lockType"] = LockRules.PHONE
         DB["recoveryCode"] = code
         Bio.disable()   // the fingerprint copy held Tally's own lock
         Ledger.persist()
+        DevicePrefs.remove(Ledger.NEW_CODE)
         lockChanged(); Ledger.bump()
         Dialogs.snack(t("phonelock.on", "Tally now opens with your phone's lock"))
+        afterLockChange()
         return true
     }
 
-    /** "Show recovery code": behind the phone's prompt (or the code itself, when that is gone). */
+    /** "Show recovery code": behind the lock (the fingerprint, PIN or phone's prompt, or the code itself). */
     suspend fun showRecovery() {
-        if (kind() != LockKind.PHONE) return
+        if (kind() == LockKind.OFF) return
         if (!LockFlow.confirm(t("recovery.forShow", "To show the recovery code."), null)) return
         val code = DB.s("recoveryCode")
-        if (!RecoveryCode.valid(code)) { Dialogs.tell(t("recovery.missing", "The recovery code is not kept in this book.\n\nTo get a new one, choose Tally's own lock and then the phone's lock again.")); return }
-        showCode(code, setup = false)
+        if (!RecoveryCode.valid(code)) { Dialogs.tell(t("recovery.missing", "The recovery code is not kept in this book.\n\nTo get a new one, turn the lock off and set it again.")); return }
+        if (showCode(code, setup = false)) DevicePrefs.remove(Ledger.NEW_CODE)
     }
 
     /** After the book was opened with the recovery code (this phone's copy of the key is gone): the phone's prompt again, if it can. */
@@ -113,7 +195,7 @@ object LockModes {
         if (kind() != LockKind.PHONE || PhoneLock.fits(Crypto.salt)) return
         val act = MainActivity.current ?: return
         val salt = Crypto.salt ?: return
-        val key = Crypto.key ?: return
+        val key = withContext(Dispatchers.Default) { Crypto.phoneCopyKey(DB.s("recoveryCode").ifEmpty { return@withContext null }) } ?: return
         if (PhoneLock.offer(act) != PhoneLockOffer.OK) {
             Dialogs.tell(t("phonelock.noLockNow", "Tally can't use this phone's lock.\n\nTally will ask for your recovery code each time. To choose another lock, open Family, then App lock."))
             return
@@ -162,6 +244,7 @@ object LockModes {
 @Composable
 fun RecoveryCodeHost() {
     val s = LockModes.sheet.value ?: return
+    SecureWhileShown()
     var step by remember(s) { mutableIntStateOf(0) }
     var typed by remember(s) { mutableStateOf("") }
     val close = { s.result.complete(false); Unit }
@@ -203,7 +286,7 @@ private fun CodeShown(code: String, setup: Boolean) {
             }
         }
         Text(
-            t("recovery.keep", "Write these 20 digits on paper and keep the paper safe, away from the phone. You need them to open a backup on a new phone, or if this phone's screen lock is ever removed."),
+            t("recovery.keepAll", "Write these 20 digits on paper and keep the paper safe, away from the phone. You need them to open a backup on a new phone, or if you forget your lock."),
             style = Apple.type.body, color = Apple.colors.label, modifier = Modifier.padding(horizontal = 4.dp),
         )
         if (setup) Text(
