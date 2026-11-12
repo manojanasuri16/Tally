@@ -1,14 +1,16 @@
-# Free Supabase projects pause after a week without activity. Four times a day, call the relay's tally_ping function
-# (it sweeps expired requests, invites and files, and returns 1) so the sync relay stays awake. Fails the run on anything
-# but HTTP 200.
+# Free Supabase projects pause after a week without activity. Every three hours, call the relay's tally_ping function
+# (it sweeps expired requests, invites and files and families of one nobody used for 60 days, at most every 10 minutes, and
+# returns 1) so the sync relay stays awake. Fails the run on anything but HTTP 200.
 #
 # Then the storage check: tally_relay_usage (no credentials; totals only, nothing about any family) says how big the whole
-# database is against the free tier's 500 MB. Above 70 % the run fails with a plain message, so GitHub emails the owner.
+# database is against the free tier's 500 MB and how much it grew in the last 24 hours. The run fails with a plain message, so
+# GitHub emails the owner, above 50 % or after more than 25 MB of growth in a day (someone filling the relay). The relay itself
+# refuses new data at 425 MiB (the tally_hardening migration), well before Supabase would make it read-only.
 name: Keep the relay awake
 
 on:
   schedule:
-    - cron: "17 3,9,15,21 * * *"   # four times a day: GitHub skips scheduled runs now and then, and one success a week is enough
+    - cron: "17 */3 * * *"   # every three hours: GitHub skips scheduled runs now and then; the alert needs to be early
   workflow_dispatch:
 
 permissions: {}
@@ -30,7 +32,7 @@ jobs:
           echo "HTTP $code: $(head -c 200 body.txt)"
           [ "$code" = "200" ]
 
-      - name: Check the relay's storage (alert above 70 % of 500 MB)
+      - name: Check the relay's storage (alert above 50 % of 500 MB, or 25 MB of growth in a day)
         env:
           URL: ${{ secrets.TALLY_SUPABASE_URL }}
           KEY: ${{ secrets.TALLY_SUPABASE_ANON_KEY }}
@@ -41,9 +43,13 @@ jobs:
           echo "HTTP $code: $(head -c 300 usage.json)"
           [ "$code" = "200" ] || { echo "::error::Could not read the relay's storage (tally_relay_usage answered HTTP $code)."; exit 1; }
           db=$(jq -r '.db_bytes' usage.json); limit=$(jq -r '.limit_bytes' usage.json); blobs=$(jq -r '.blob_bytes' usage.json)
-          pct=$(jq -r '.percent' usage.json)
-          echo "Database: $((db / 1048576)) MB of $((limit / 1048576)) MB ($pct %). Files in transit: $((blobs / 1048576)) MB."
-          if [ "$db" -gt $((limit * 70 / 100)) ]; then
+          pct=$(jq -r '.percent' usage.json); grew=$(jq -r '.grew_24h_bytes // 0' usage.json)
+          echo "Database: $((db / 1048576)) MB of $((limit / 1048576)) MB ($pct %), grew $((grew / 1048576)) MB in 24 hours. Files in transit: $((blobs / 1048576)) MB."
+          if [ "$grew" -gt $((25 * 1048576)) ]; then
+            echo "::error::The Tally relay's database grew by $((grew / 1048576)) MB in the last 24 hours (now $pct % of 500 MB). Someone may be filling it: look at the families' sizes (record_bytes, blob_bytes) and delete abusive ones."
+            exit 1
+          fi
+          if [ "$db" -gt $((limit * 50 / 100)) ]; then
             echo "::error::The Tally relay's database is at $pct % of the free tier's 500 MB ($((db / 1048576)) MB; files in transit $((blobs / 1048576)) MB). Look at it before it fills: lower the per-family limits, shorten how long files wait, or move to a paid plan."
             exit 1
           fi
