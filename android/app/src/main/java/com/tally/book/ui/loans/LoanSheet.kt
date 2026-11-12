@@ -176,7 +176,7 @@ private fun choiceTitle(k: String): String = when (k) {
 }
 
 private fun choiceHelp(k: String): String = when (k) {
-    "bank" -> t("loan.kind.bank.help", "A home, car, personal or DWCRA loan with a monthly EMI")
+    "bank" -> t("loan.kind.bank.help", "A home, car, personal or group loan with a monthly EMI")
     "hand" -> loanWords(false).kindHelp
     "gold" -> t("loan.kind.gold.help", "A loan taken against gold")
     else -> loanWords(true).kindHelp

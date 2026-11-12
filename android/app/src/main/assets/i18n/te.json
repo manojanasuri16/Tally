@@ -249,7 +249,7 @@
   "loan.keepPrivate": "ప్రైవేట్‌గా ఉంచు",
   "loan.keepPrivate.help": "ఈ ఫోన్‌లో మాత్రమే. కుటుంబంతో పంచుకోరు.",
   "loan.kind.bank": "బ్యాంకు రుణం",
-  "loan.kind.bank.help": "ఇల్లు, కారు, వ్యక్తిగత లేదా డ్వాక్రా (DWCRA) రుణం, నెలకు EMI తో",
+  "loan.kind.bank.help": "ఇల్లు, కారు, వ్యక్తిగత లేదా గ్రూప్ (డ్వాక్రా) రుణం, నెలకు EMI తో",
   "loan.kind.given": "ఒకరికి ఇచ్చినది",
   "loan.kind.given.help": "మీకు తెలిసిన వారికి ఇచ్చిన డబ్బు",
   "loan.kind.gold": "బంగారం రుణం",

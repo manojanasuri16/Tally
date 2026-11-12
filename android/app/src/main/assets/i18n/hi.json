@@ -249,7 +249,7 @@
   "loan.keepPrivate": "निजी रखें",
   "loan.keepPrivate.help": "सिर्फ़ इसी फ़ोन में। परिवार के साथ साझा नहीं होगा।",
   "loan.kind.bank": "बैंक का कर्ज़",
-  "loan.kind.bank.help": "घर, गाड़ी, निजी या समूह (DWCRA) कर्ज़, हर महीने EMI के साथ",
+  "loan.kind.bank.help": "घर, गाड़ी, निजी या समूह कर्ज़, हर महीने EMI के साथ",
   "loan.kind.given": "किसी को दिया",
   "loan.kind.given.help": "किसी जानने वाले को दिया हुआ पैसा",
   "loan.kind.gold": "सोने पर कर्ज़",
