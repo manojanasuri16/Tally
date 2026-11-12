@@ -13,13 +13,13 @@ class SyncInviteTest {
         val id = Invite.newFamilyId()
         assertEquals(22, id.length)
         assertTrue(Invite.isFamilyId(id))
-        val text = Invite.make(id, secret, exp, "Example family")
+        val text = Invite.make(id, secret, exp, "Smith family")
         assertTrue(text.startsWith("tally://join#t2.$id."))
         val inv = Invite.parse(text)!!
         assertEquals(id, inv.familyId)
         assertArrayEquals(secret, inv.secret)
         assertEquals(exp, inv.expiresAt)
-        assertEquals("Example family", inv.name)
+        assertEquals("Smith family", inv.name)
         assertEquals(inv, Invite.parse("  $text\n"))
         assertEquals("మా కుటుంబం", Invite.parse(Invite.make(id, secret, exp, "మా కుటుంబం"))!!.name)
     }
@@ -43,9 +43,9 @@ class SyncInviteTest {
 
     @Test fun inviterTravelsInTheLastPart() {
         val id = Invite.newFamilyId()
-        val text = Invite.make(id, secret, exp, "Example family", "Ravi")
+        val text = Invite.make(id, secret, exp, "Smith family", "Ravi")
         val inv = Invite.parse(text)!!
-        assertEquals("Example family", inv.name)       // the family's name, never the inviter's
+        assertEquals("Smith family", inv.name)       // the family's name, never the inviter's
         assertEquals("Ravi", inv.inviter)
         assertEquals(inv, Invite.find("Join our family in Tally:\n$text"))
         val long = Invite.parse(Invite.make(id, secret, exp, "కు".repeat(40), "ర".repeat(200)))!!

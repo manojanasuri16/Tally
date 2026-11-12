@@ -20,12 +20,12 @@ class BookTest {
     @Test fun sealAndUnsealWithTheLock() {
         Crypto.clearLock()
         Crypto.setLock("2468", "pin")
-        val env = Crypto.sealText("""{"v":1,"me":{"name":"Amma"}}""")
+        val env = Crypto.sealText("""{"v":1,"me":{"name":"Alex"}}""")
         assertTrue(env.b("enc"))
         Crypto.clearLock()
         assertFalse(Crypto.locked)
         val back = Crypto.unseal(env, "2468").asObj()
-        assertEquals("Amma", back.o("me").s("name"))
+        assertEquals("Alex", back.o("me").s("name"))
         assertTrue(Crypto.locked)
         assertThrows(Exception::class.java) { Crypto.unseal(env, "0000") }
         Crypto.clearLock()

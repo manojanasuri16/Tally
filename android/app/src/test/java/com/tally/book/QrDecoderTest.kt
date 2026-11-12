@@ -23,7 +23,7 @@ class QrDecoderTest {
     }
 
     // fixed bytes keep the test the same every run; QrEncoderTest covers the random ones
-    private val invite = Invite.make(Invite.b64url(ByteArray(16) { (it * 11).toByte() }), ByteArray(32) { (it * 5).toByte() }, 1_800_000_000_000L, "Example family", "Ravi")
+    private val invite = Invite.make(Invite.b64url(ByteArray(16) { (it * 11).toByte() }), ByteArray(32) { (it * 5).toByte() }, 1_800_000_000_000L, "Smith family", "Ravi")
 
     @Test fun readsTheInviteTheSheetDraws() {
         val (luma, stride, side) = plane(invite)

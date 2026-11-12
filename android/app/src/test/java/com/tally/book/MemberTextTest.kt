@@ -15,7 +15,7 @@ class MemberTextTest {
         FamilyMember(id, name, admin, creator, me, since)
 
     private fun view(vararg members: FamilyMember) = MembershipView(
-        "fam", "Example family", false, members.firstOrNull { it.me }?.id.orEmpty(), members.any { it.me && it.admin }, members.any { it.me && it.creator },
+        "fam", "Smith family", false, members.firstOrNull { it.me }?.id.orEmpty(), members.any { it.me && it.admin }, members.any { it.me && it.creator },
         members.toList(), emptyList(), null, null, false,
     )
 
@@ -82,10 +82,10 @@ class MemberTextTest {
 
     @Test fun requestReadsWhoAsksAndWhoInvited() {
         val r = JoinRequest("inv1", "Asha", "m2", "Ravi", 0, 0)
-        assertEquals("Asha wants to join Example family. Ravi invited them.", MemberText.requestLine(r, "Example family", "m1"))
-        assertEquals("Asha wants to join Example family. You invited them.", MemberText.requestLine(r, "Example family", "m2"))
+        assertEquals("Asha wants to join Smith family. Ravi invited them.", MemberText.requestLine(r, "Smith family", "m1"))
+        assertEquals("Asha wants to join Smith family. You invited them.", MemberText.requestLine(r, "Smith family", "m2"))
         val unknown = JoinRequest("inv1", "Asha", "m9", "", 0, 0)
-        assertEquals("Asha wants to join Example family.", MemberText.requestLine(unknown, "Example family", "m1"))
+        assertEquals("Asha wants to join Smith family.", MemberText.requestLine(unknown, "Smith family", "m1"))
     }
 
     @Test fun inviteTimeLeftRoundsUp() {

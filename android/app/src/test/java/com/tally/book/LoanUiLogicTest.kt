@@ -132,7 +132,7 @@ class LoanUiLogicTest {
         obj("id" to id, "name" to name, "kind" to if (dir != null) "hand" else "bank", "direction" to dir, "private" to private, "closed" to closed)
 
     @Test fun privateLoansLeaveTheKindGroupsAndGatherInTheirOwn() {
-        val open = listOf(l("a", "Bank"), l("b", "Zed", private = true), l("c", "Amma", "given", private = true), l("d", "Ravi", "given"))
+        val open = listOf(l("a", "Bank"), l("b", "Zed", private = true), l("c", "Alex", "given", private = true), l("d", "Ravi", "given"))
         val owed = mapOf("a" to 100.0, "b" to 40.0, "c" to 25.0, "d" to 7.0)
         val (shared, priv) = splitPrivate(open, owed)
         assertEquals(listOf("a", "d"), shared.map { it.s("id") })

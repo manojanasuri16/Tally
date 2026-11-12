@@ -58,7 +58,7 @@ object MemberText {
         }
     }
 
-    /** "Asha wants to join Example family. Ravi invited them." The second sentence is left out when nobody is known. */
+    /** "Asha wants to join Smith family. Ravi invited them." The second sentence is left out when nobody is known. */
     fun requestLine(r: JoinRequest, familyName: String, myId: String): String {
         val fam = familyName.ifBlank { t("family.the", "the family") }
         val head = t("req.line", "{name} wants to join {family}.", "name" to r.name, "family" to fam)

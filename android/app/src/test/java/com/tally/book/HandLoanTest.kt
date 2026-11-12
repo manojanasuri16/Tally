@@ -28,9 +28,9 @@ class HandLoanTest {
     private fun pay(l: Obj, date: String, amount: Double, kind: String) = savePayment(obj("loanId" to l.s("id"), "date" to date, "amount" to amount, "kind" to kind))
     private fun v(l: Obj, on: String = "2026-11-11") = loanView(loan(l.s("id"))!!, d(on))
 
-    // Suryarao: 2% a month on 50,000 = 1,000 a month, interest only; the principal stays 50,000 until it is returned in full.
+    // Mr Smith: 2% a month on 50,000 = 1,000 a month, interest only; the principal stays 50,000 until it is returned in full.
     @Test fun interestOnlyLoanKeepsFullPrincipal() {
-        val l = hand("Suryarao", 50000.0, 2.0)
+        val l = hand("Mr Smith", 50000.0, 2.0)
         assertEquals(1000.0, v(l).num("nextDueAmount"), 0.0)
         pay(l, "2026-10-10", 1000.0, "interest"); pay(l, "2026-11-10", 1000.0, "interest")
         val w = v(l, "2026-11-12")
@@ -168,14 +168,14 @@ class HandLoanTest {
     }
 
     @Test fun whoAddedIt() {
-        assertEquals("Ravi · added by Amma", loanRowSub("Ravi", "Amma")); assertEquals("Ravi", loanRowSub("Ravi", null))
-        assertEquals("Added by Amma", loanRowSub("", "Amma")); assertNull(loanRowSub("", null))
-        val line = addedByLine("m1", 1.0, "m1", { if (it == "m1") "Amma" else "Nanna" }) { "05-Nov-2026" }
-        assertEquals("Added by Amma on 05-Nov-2026", line)
-        assertEquals("Added by Amma on 05-Nov-2026\nLast changed by Nanna", addedByLine("m1", 1.0, "m2", { if (it == "m1") "Amma" else "Nanna" }) { "05-Nov-2026" })
-        assertEquals("Added by Amma", addedByLine("m1", 0.0, "", { "Amma" }) { "" })
+        assertEquals("Ravi · added by Alex", loanRowSub("Ravi", "Alex")); assertEquals("Ravi", loanRowSub("Ravi", null))
+        assertEquals("Added by Alex", loanRowSub("", "Alex")); assertNull(loanRowSub("", null))
+        val line = addedByLine("m1", 1.0, "m1", { if (it == "m1") "Alex" else "Sam" }) { "05-Nov-2026" }
+        assertEquals("Added by Alex on 05-Nov-2026", line)
+        assertEquals("Added by Alex on 05-Nov-2026\nLast changed by Sam", addedByLine("m1", 1.0, "m2", { if (it == "m1") "Alex" else "Sam" }) { "05-Nov-2026" })
+        assertEquals("Added by Alex", addedByLine("m1", 0.0, "", { "Alex" }) { "" })
         // alone on the phone: nobody else could have added it
-        me(); setMyName("Amma"); hand("x", 1.0, 0.0)
+        me(); setMyName("Alex"); hand("x", 1.0, 0.0)
         assertFalse(bookHasOthers())
         DB["family"] = obj("id" to "f", "key" to "k", "name" to "Home")
         assertTrue(bookHasOthers())

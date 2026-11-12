@@ -125,7 +125,7 @@ private fun StartSheet(initial: String, onDismiss: () -> Unit, onStart: (String)
     ) {
         TextInput(
             name, { name = it }, t("family.name.label", "Family name"),
-            placeholder = t("family.name.placeholder", "e.g. Example family"),
+            placeholder = t("family.name.placeholder", "e.g. Our family"),
             supporting = t("family.name.help", "Your family will see this name when they join."),
         )
     }

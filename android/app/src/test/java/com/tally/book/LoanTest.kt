@@ -14,7 +14,7 @@ class LoanTest {
         resetModelState()
         DB = freshDb(); ensureBookShape(DB)
         Clock.fixed = LocalDateTime.of(2026, 11, 11, 9, 0)
-        setMyName("Amma")
+        setMyName("Alex")
     }
     @After fun tearDown() { Clock.fixed = null }
 
@@ -289,19 +289,19 @@ class LoanTest {
     }
 
     @Test fun namesAndMembers() {
-        assertEquals("Amma", memberName(myId()))
+        assertEquals("Alex", memberName(myId()))
         assertEquals("Someone", memberName("nobody"))
         assertEquals("Someone", memberName(null))
         assertTrue(DB.objs("members").isEmpty()) // no family yet
         DB["family"] = obj("id" to "fam", "key" to "k", "name" to "Home")
-        setMyName("Amma K")
-        assertEquals("Amma K", DB.objs("members").single().s("name"))
+        setMyName("Alex K")
+        assertEquals("Alex K", DB.objs("members").single().s("name"))
         assertTrue(DB.oo("sync").oo("dirty").b(myId()))
-        setMyName("Amma Kumari")
+        setMyName("Alex Kumari")
         assertEquals(1, DB.objs("members").size)
-        assertEquals("Amma Kumari", memberName(myId()))
-        DB.objs("members").single()["name"] = "Nanna"; DB.objs("members").single()["id"] = "m2"
-        assertEquals("Nanna", memberName("m2"))
+        assertEquals("Alex Kumari", memberName(myId()))
+        DB.objs("members").single()["name"] = "Sam"; DB.objs("members").single()["id"] = "m2"
+        assertEquals("Sam", memberName("m2"))
     }
 
     @Test fun ensureShape() {

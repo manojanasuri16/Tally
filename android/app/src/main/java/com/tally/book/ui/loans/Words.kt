@@ -71,7 +71,7 @@ fun loanRowSub(lender: String, adder: String?): String? = when {
     else -> t("loan.row.addedBy", "{lender} · added by {name}", "lender" to lender, "name" to adder)
 }
 
-/** The detail's line under the kind: "Added by Amma on 05-Nov-2026", then "Last changed by Nanna" when someone else edited it. */
+/** The detail's line under the kind: "Added by Alex on 05-Nov-2026", then "Last changed by Sam" when someone else edited it. */
 fun addedByLine(by: String, atMillis: Double, updatedBy: String, myName: (String) -> String, dateOf: (Double) -> String): String {
     val who = myName(by)
     val on = if (atMillis > 0) dateOf(atMillis) else ""
