@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="window_bg">#111113</color>
+    <color name="widget_cell">#1E1E21</color>
 </resources>

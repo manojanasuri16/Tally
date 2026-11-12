@@ -10,6 +10,7 @@ import com.tally.book.data.Ledger
 import com.tally.book.sync.Notices
 import com.tally.book.ui.family.installSyncHooks
 import com.tally.book.ui.lock.Bio
+import com.tally.book.widget.NextPaymentData
 
 class TallyApplication : Application() {
     override fun onCreate() {
@@ -24,6 +25,7 @@ class TallyApplication : Application() {
         installSyncHooks()
         Notices.init(this)
         DueNotices.init(this)
+        NextPaymentData.init(this)
         // stored documents follow the lock (encrypted while a lock is set)
         Ledger.onStarted = { FileStore.filesAfterPersist() }
     }

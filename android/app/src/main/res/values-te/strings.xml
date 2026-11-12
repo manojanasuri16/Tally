@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_next_label">తదుపరి చెల్లింపు</string>
+    <string name="widget_next_desc">మీ తదుపరి చెల్లింపును, ఏదైనా గడువు దాటిందో లేదో చూపిస్తుంది. యాప్ లాక్ అయి ఉన్నప్పుడు లేదా మొత్తాలు దాచినప్పుడు పేరు గానీ మొత్తం గానీ చూపించదు.</string>
+    <string name="widget_preview_caption">తదుపరి చెల్లింపు</string>
+    <string name="widget_preview_name">City Bank</string>
+    <string name="widget_preview_detail">5 డిసెం · ₹21,696</string>
+    <string name="widget_preview_overdue">2 గడువు దాటాయి</string>
+</resources>

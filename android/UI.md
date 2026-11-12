@@ -208,6 +208,11 @@ The other half is ledger reads. Reading `DB` also reads a Compose state that `Le
 | Ripples off, `pressable` / `pressDim` | `indication = ripple()` |
 
 
+## Appearance and the widget
+
+- **Appearance** (Family page, after Language): three check rows, "Automatic (follows the phone)", "Light", "Dark". A device setting (`ThemeMode`, `tally-theme-mode`), the same before and after unlock. It applies at once, lock screen included: `MainActivity.applyChrome` paints the window behind the app (`ThemeMode.windowColor`, the same as the page background and `values-night/colors.xml`, so no white flash) and sets the status and navigation bar icon colours for the resolved mode. Black is no longer offered (an old stored value still works).
+- **The "Next payment" widget** (`widget/`): a rounded 22 dp card, white (dark: #1E1E21), the app's label and secondary-label colours, system red for "overdue", no Material tonal colours. Small (2x1): one bold line (name, date, amount) and a second line (overdue in red, or the title). Larger: title, name in 20 sp bold, date and amount in 16 sp, the overdue line. Light and dark follow the phone, not the Appearance setting.
+
 ## Screens and data
 
 - **Read the book** with `val rev = rememberLedger()` and compute in `remember(rev) { … }`. Change it only inside `Ledger.edit { … }`.

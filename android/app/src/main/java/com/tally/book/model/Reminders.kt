@@ -71,3 +71,41 @@ fun dueDatesAhead(today: LocalDate = Clock.today(), days: Int = 60): List<Pair<L
     val keep = out - past.toSet() + listOf(false, true).mapNotNull { g -> past.filter { it.second == g }.minByOrNull { it.first } }
     return keep.sortedWith(compareBy({ it.first }, { it.second }))
 }
+
+/**
+ * The next payment for the home-screen widget (widget/, docs/DESIGN.md "Widget"): the loan [name], the [date] and the [amount] of
+ * the soonest payment on money I took, and how many open loans are [overdue]. [date] is null when nothing falls due in the next days.
+ * [late] marks that the payment shown is itself already overdue (nothing later was found), so it is already in [overdue].
+ */
+data class NextPayment(val name: String, val date: LocalDate?, val amount: Double, val overdue: Int, val late: Boolean)
+
+/**
+ * Looks at every open loan I took (money I gave is never in the widget): the earliest instalment, interest period or repay-by date
+ * from [today] to [days] ahead, with everything unpaid on that date added up; the number of loans with something overdue; and, when
+ * nothing is coming up but something is overdue, the oldest overdue one as the payment shown ([NextPayment.late]).
+ */
+fun nextPaymentFor(today: LocalDate = Clock.today(), days: Int = 60): NextPayment {
+    val until = today.plusDays(days.coerceIn(0, 400).toLong())
+    class Cand(val name: String, val date: LocalDate, val amount: Double)
+    val upcoming = ArrayList<Cand>(); val past = ArrayList<Cand>()
+    var overdue = 0
+    for (l in loans().filter { !it.b("closed") && !isGiven(it) }) {
+        val c = calcOf(l, paymentsOf(l.s("id")), until) ?: continue
+        val name = l.s("name").trim().ifEmpty { l.s("lender").trim() }
+        val by = if (hasRepayBy(l.s("kind"))) parseISO(l.s("repayBy")) else null
+        val late = c.slots.filter { it.due.isBefore(today) }
+        val principalLate = by != null && c.balance > 0 && by.isBefore(today)
+        if (late.isNotEmpty() || principalLate) {
+            overdue++
+            val oldest = listOfNotNull(late.firstOrNull()?.due, if (principalLate) by else null).min()
+            past.add(Cand(name, oldest, if (principalLate) c.balance else late.sumOf { it.left }))
+        }
+        c.slots.filter { !it.due.isBefore(today) && !it.due.isAfter(until) }.groupBy { it.due }.minByOrNull { it.key }
+            ?.let { (d, s) -> upcoming.add(Cand(name, d, s.sumOf { it.left })) }
+        if (by != null && c.balance > 0 && !by.isBefore(today) && !by.isAfter(until)) upcoming.add(Cand(name, by, c.balance))
+    }
+    val order = compareBy<Cand> { it.date }.thenBy { it.name }
+    upcoming.minWithOrNull(order)?.let { return NextPayment(it.name, it.date, it.amount, overdue, false) }
+    past.minWithOrNull(order)?.let { return NextPayment(it.name, it.date, it.amount, overdue, true) }
+    return NextPayment("", null, 0.0, 0, false)
+}

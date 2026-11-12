@@ -20,6 +20,7 @@ import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.delay
 import com.tally.book.core.*
 import com.tally.book.data.DueNotices
+import com.tally.book.widget.NextPaymentData
 import com.tally.book.data.Ledger
 import com.tally.book.ui.components.*
 import com.tally.book.sync.Sync
@@ -126,11 +127,16 @@ fun MainScaffold() {
     }
 }
 
-/** Keeps the device copy of the due dates (data/DueNotices.kt) in step with the book, a moment after each change. */
+/** Keeps the device copy of the due dates (data/DueNotices.kt) and the widget's snapshot (widget/WidgetData.kt) in step with the book, a moment after each change. */
 @Composable
 private fun DueCacheKeeper() {
     val rev = rememberLedger()
-    LaunchedEffect(rev) { delay(1_500); runCatching { DueNotices.refreshCache() } }
+    LaunchedEffect(rev) {
+        // names and amounts leave the widget's device copy at once when it may no longer hold them (amounts hidden, a lock set)
+        if (!NextPaymentData.mayKeep() && DevicePrefs.get(NextPaymentData.SNAP) != null) NextPaymentData.clear()
+        delay(1_500)
+        runCatching { DueNotices.refreshCache(); NextPaymentData.refresh() }
+    }
 }
 
 /** The label of the "‹ Parent" back button: the screen this one was pushed from. */

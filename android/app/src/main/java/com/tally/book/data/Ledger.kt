@@ -200,6 +200,8 @@ object Ledger {
 /** lockChanged(): a lock was set, changed or removed: the stored documents follow it now. */
 fun lockChanged() {
     FileStore.filesAfterPersist()
+    // a lock now set: the widget's names and amounts go at once (removed again when the lock is removed)
+    runCatching { com.tally.book.widget.NextPaymentData.refresh() }
 }
 
 /** Erase everything: the documents go with the book. */

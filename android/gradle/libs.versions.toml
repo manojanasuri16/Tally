@@ -13,6 +13,7 @@ splash = "1.0.1"
 camerax = "1.4.1"
 zxing = "3.5.3"
 work = "2.10.0"
+glance = "1.1.1"
 junit = "4.13.2"
 
 [libraries]
@@ -37,6 +38,8 @@ androidx-camera-lifecycle = { module = "androidx.camera:camera-lifecycle", versi
 androidx-camera-view = { module = "androidx.camera:camera-view", version.ref = "camerax" }
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 androidx-work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
+glance-appwidget = { module = "androidx.glance:glance-appwidget", version.ref = "glance" }
+glance-material3 = { module = "androidx.glance:glance-material3", version.ref = "glance" }
 junit = { module = "junit:junit", version.ref = "junit" }
 
 [plugins]

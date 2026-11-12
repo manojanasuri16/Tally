@@ -5,4 +5,6 @@
     <color name="icon_accent">#FFD479</color>
     <!-- matches the web app's light page background so there is no flash between splash and first paint -->
     <color name="window_bg">#F2F2F7</color>
+    <!-- the "Next payment" widget card -->
+    <color name="widget_cell">#FFFFFF</color>
 </resources>

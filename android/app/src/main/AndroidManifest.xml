@@ -46,6 +46,12 @@
             </intent-filter>
         </activity>
 
+        <!-- widget: NEVER rename or move this receiver (placed widgets point at it by class name) -->
+        <receiver android:name=".widget.NextPaymentWidgetReceiver" android:exported="true" android:label="@string/widget_next_label">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_next_payment_info" />
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"

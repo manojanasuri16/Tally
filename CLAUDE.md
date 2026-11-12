@@ -10,7 +10,7 @@ It is a sibling of Balance (`~/Balance/android`), whose foundation it copies (co
 
 ## Hard rules
 
-- **Never change** the `applicationId` (`com.tally.book`) or the release key (`TALLY_STORE_*` in `~/.gradle/gradle.properties`, never committed).
+- **Never change** the `applicationId` (`com.tally.book`), the release key (`TALLY_STORE_*` in `~/.gradle/gradle.properties`, never committed), or the widget receiver's class name and package (`com.tally.book.widget.NextPaymentWidgetReceiver`: placed widgets point at it).
 - **`versionCode` goes up every release.**
 - **Privacy:** only the sync relay is contacted, and only ciphertext leaves the phone. `allowBackup="false"` stays. A private loan, its payments and its files never leave the phone, except inside a backup file the person makes.
 - **The book is a JSON tree, not data classes.** `DB` is `Obj`/`Arr` with every number a `Double`, and unknown fields round-trip untouched.
@@ -33,6 +33,8 @@ It is a sibling of Balance (`~/Balance/android`), whose foundation it copies (co
 - **The invite text** (`tally://join#t2...`) is made fresh by `SyncEngine.newInvite()` each time the Invite sheet opens, shown only there and handed to the system share sheet. Never put it (or its secret) in a snack, a dialog, a log, a crash message, saved state (`rememberSaveable`) or the book; the join confirmation shows only the family name and the inviter's name parsed from it. The camera scanner and the Join field pass it straight to `Invite.find` (old 0.1.0/0.2.0 codes: `Invite.isOld`, refused with a plain message). The joining phone keeps the secret in `DB.joining` only until it is let in or refused.
 - **UI words about sharing** are "family", "share", "join". Never "relay", "key" or "encrypt" on screen, apart from the one line "Only your family can read what you share."
 - **Backups** (`docs/DESIGN.md` "Backups"): the `.tally-backup` format is version 1 (`BackupFormat.VERSION`); a change to it is a new version with a reader for the old one. The book and files go in exactly as stored on disk (sealed when locked), never decrypted, re-encoded or compressed. Device-only settings (`DevicePrefs`: language, the backup folder, fingerprint) are never in a backup. A restore checks everything before touching anything, keeps one safety copy, swaps in behind a journal, never removes a lock the person set, and marks the book `sync.restored`. A backup reads the book only through `Ledger.readStoredBytes()` and the files under `FileStore.filesExclusive` + `FileStore.io`; any new writer of the book or files holds those locks too.
+- **Widget privacy:** the "Next payment" widget (`widget/`) shows a loan name or amount only from the device snapshot (`tally-widget-next`), which exists only while a widget is placed, the book is open, no app lock is set and amounts are shown (`NextPaymentData.snapshotText`). Locked or hidden, it shows dates-only text from the due-date copy. Any new way to lock or hide must clear it.
+- **Appearance** (Automatic / Light / Dark) is a device setting (`DevicePrefs` `tally-theme-mode`, `ui/theme/ThemeMode.kt`), never in the book or a backup.
 - **Design follows `android/UI.md`.** Never use Material tab or chip rows for navigation. One root screen, pushed sub-screens, forms in sheets with Cancel and Save pinned.
 
 ## Map
@@ -46,10 +48,11 @@ android/app/src/main/java/com/tally/book/
   data/        Ledger (load/lock/save), Crypto, Files (FileStore), BackupCore (the backup file: make, check, install; plain JVM),
                Backups (folder, daily WorkManager job + catch-up, share file, install under the app's locks; BackupWorker),
                DueNotices (the daily payment-reminder job + notification, from a device copy of due dates only)
+  widget/      NextPaymentWidget + NextPaymentWidgetReceiver (Glance), WidgetText (pure: what it says), WidgetData (NextPaymentData: device snapshot, refresh/clear, daily redraw job)
   sync/        family sync: SyncCrypto (HKDF, epoch seal/open, P-256 identities, sealing to a public key), Invite, Relay (+ HttpRelay),
                Membership (pure: keyring, key boxes, requests, invite boxes, MembershipView), SyncModel (pure merge/push rules),
                SyncEngine (sync + create/join/approve/remove/roles/rename/leave), Sync (app wiring), Notices (join-request check, WorkManager + notification)
-  ui/          App.kt (Routes, AppNav, shell, SubScreen), theme/, components/ (the kit + Qr + PullRefresh), lock/,
+  ui/          App.kt (Routes, AppNav, shell, SubScreen), theme/ (Theme, Tokens, ThemeMode: the Appearance setting), components/ (the kit + Qr + PullRefresh), lock/,
                family/ (FamilyScreen + Join + familyGraph, FamilyMembers (members, member sheet, invite sheet), FamilyStates (waiting, removed/denied, old family), JoinRequests (the Allow / Don't allow cards), MemberText (pure: member actions, leave/remove/request words), QrScanner + QrDecoder (CameraX + ZXing), FamilyFlow (create/join/leave, "please wait"), BackupFlow (Backup group, restore/undo flow, BackupText, home "stopped" line),
                SyncWiring (pull to refresh + status line), FastJoin (open-app join polling), ReminderSettings (Payment reminders switch + first-loan offer), SyncText (pure words for sync: ago, errors, status), NoticePermission (the Android 13+ notification permission hook)),
                loans/ (LoansScreen + Welcome + loansGraph, LoanDetail, LoanSheet, FormRules (pure: which fields show, renewal suggestion), LoanActions (Rate changed, Renewed sheets), PaymentSheet, Attachments (photos, documents, FileStore glue),

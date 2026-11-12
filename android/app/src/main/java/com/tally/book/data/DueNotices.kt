@@ -19,6 +19,7 @@ import com.tally.book.core.*
 import com.tally.book.model.DB
 import com.tally.book.model.dueDatesAhead
 import com.tally.book.sync.Notices
+import com.tally.book.widget.NextPaymentData
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -112,14 +113,23 @@ object DueNotices {
     fun turn(on: Boolean) {
         enabled = on
         val ctx = app ?: return
-        if (on) { schedule(ctx); refreshCache() } else { cancel(ctx); DevicePrefs.remove(CACHE); dismiss(ctx) }
+        if (on) { schedule(ctx); refreshCache() } else { cancel(ctx); if (!NextPaymentData.placed) DevicePrefs.remove(CACHE); dismiss(ctx) }
     }
 
-    /** Re-reads the dates from the open book. Call on the main thread while the book is open; it does nothing when the setting is off. */
+    /**
+     * Re-reads the dates from the open book. Call on the main thread while the book is open. The copy is kept while the reminders
+     * are on or a "Next payment" widget is placed (it uses the same dates while the app is locked); otherwise it is removed.
+     */
     fun refreshCache() {
-        if (!enabled) { DevicePrefs.remove(CACHE); return }
+        if (!enabled && !NextPaymentData.placed) { DevicePrefs.remove(CACHE); return }
         DevicePrefs.set(CACHE, cacheOf(dueDatesAhead(Clock.today(), 60)))
     }
+
+    /** The cached dates of money I took (null when no copy was ever saved), for the widget. */
+    fun takenDates(): List<String>? = DevicePrefs.get(CACHE)?.let { readCache(it).first }
+
+    /** [refreshCache] if the book is open (a widget was just placed); otherwise the next time the app opens does it. */
+    fun refreshCacheIfOpen() { if (Ledger.phase.value == Ledger.Phase.READY) refreshCache() }
 
     /** True once: the first time a loan is saved with the setting on and notifications not yet allowed, so the person is asked in plain words. */
     fun shouldOffer(ctx: Context): Boolean {

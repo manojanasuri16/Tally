@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- the picker's picture on Android 11 and older: a card with the three lines as bars -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item><shape><solid android:color="#FFFFFF"/><corners android:radius="22dp"/><size android:width="220dp" android:height="110dp"/></shape></item>
+    <item android:left="18dp" android:top="22dp" android:right="150dp" android:bottom="78dp"><shape><solid android:color="#C7C7CC"/><corners android:radius="4dp"/></shape></item>
+    <item android:left="18dp" android:top="42dp" android:right="90dp" android:bottom="52dp"><shape><solid android:color="#1D1D1F"/><corners android:radius="5dp"/></shape></item>
+    <item android:left="18dp" android:top="62dp" android:right="70dp" android:bottom="36dp"><shape><solid android:color="#6E6E73"/><corners android:radius="4dp"/></shape></item>
+    <item android:left="18dp" android:top="82dp" android:right="130dp" android:bottom="16dp"><shape><solid android:color="#D70015"/><corners android:radius="4dp"/></shape></item>
+</layer-list>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_next_label">अगला भुगतान</string>
+    <string name="widget_next_desc">आपका अगला भुगतान और कुछ देय-तिथि से पार हुआ या नहीं, यह दिखाता है। ऐप लॉक हो या रकम छिपी हो तो यह कोई नाम या रकम नहीं दिखाता।</string>
+    <string name="widget_preview_caption">अगला भुगतान</string>
+    <string name="widget_preview_name">City Bank</string>
+    <string name="widget_preview_detail">5 दिस॰ · ₹21,696</string>
+    <string name="widget_preview_overdue">2 बकाया</string>
+</resources>

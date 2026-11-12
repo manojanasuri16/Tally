@@ -86,5 +86,8 @@ dependencies {
     implementation(libs.zxing.core)
     // The daily backup into the folder the person picked (data/Backups.kt).
     implementation(libs.androidx.work.runtime)
+    // The "Next payment" home-screen widget (widget/).
+    implementation(libs.glance.appwidget)
+    implementation(libs.glance.material3)
     testImplementation(libs.junit)
 }

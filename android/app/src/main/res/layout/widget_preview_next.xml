@@ -1,0 +1,7 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:gravity="center_vertical" android:paddingHorizontal="14dp" android:paddingVertical="12dp" android:background="@drawable/widget_bg">
+    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/widget_preview_caption" android:textSize="13sp" android:textColor="#6E6E73"/>
+    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/widget_preview_name" android:textSize="20sp" android:textStyle="bold" android:textColor="#1D1D1F"/>
+    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/widget_preview_detail" android:textSize="16sp" android:textColor="#1D1D1F"/>
+    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:text="@string/widget_preview_overdue" android:textSize="14sp" android:textColor="#D70015"/>
+</LinearLayout>

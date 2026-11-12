@@ -1,9 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
     <string name="app_name">Tally</string>
     <string name="share_log">Log a payment</string>
     <string name="bio_title">Unlock Tally</string>
     <string name="bio_setup_title">Turn on fingerprint unlock</string>
     <string name="bio_subtitle">Confirm it\'s you</string>
     <string name="bio_cancel">Use PIN</string>
+    <string name="widget_next_label">Next payment</string>
+    <string name="widget_next_desc">Shows your next payment and whether anything is overdue. When the app is locked or amounts are hidden, it never shows a name or an amount.</string>
+    <string name="widget_preview_caption">Next payment</string>
+    <string name="widget_preview_name">City Bank</string>
+    <string name="widget_preview_detail">5 Dec · ₹21,696</string>
+    <string name="widget_preview_overdue">2 overdue</string>
 </resources>
