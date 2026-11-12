@@ -23,7 +23,10 @@ import kotlinx.coroutines.withContext
  *      requests (any that do not check out are turned down);
  *   4. push every dirty record under the newest key (private ones only as tombstones, and only if the relay holds them);
  *      a phone that does not hold the newest key yet pushes nothing;
- *   5. upload the sealed bytes of each file in sync.blobsUp; download the bytes of any live file that has none here.
+ *   5. files (docs/DESIGN.md "Files": the relay holds them only in transit): ask the relay which files this member is owed and
+ *      which files others asked for; upload the sealed bytes of each file in sync.blobsUp, and again the bytes of any asked-for
+ *      file this phone holds; download every file this member is owed, and acknowledge each only once it is stored here and
+ *      checked against the record's SHA-256 (the relay deletes a file once nobody is owed it, or after 30 days).
  * Only one sync, create, join, leave or membership change runs at a time. Network work happens in the Relay (on IO),
  * sealing on [cpu], and every read or write of the book goes through [SyncBook].
  */
@@ -80,6 +83,16 @@ sealed class SyncResult {
     object Replaced : SyncResult() { override fun toString() = "Replaced" }
     /** The book has a family made by 0.1.0/0.2.0, which the relay no longer serves: leave it, then start or join again. */
     object OldFamily : SyncResult() { override fun toString() = "OldFamily" }
+}
+
+/** How "Ask for this file" went. */
+sealed class FileAsk {
+    /** The bytes are on this phone now. */
+    object Here : FileAsk() { override fun toString() = "Here" }
+    /** The ask is with the family: a phone that has the file sends it again when it next syncs. */
+    object Asked : FileAsk() { override fun toString() = "Asked" }
+    object NoFamily : FileAsk() { override fun toString() = "NoFamily" }
+    data class Failed(val error: SyncError) : FileAsk()
 }
 
 /** A new invite: show [text] as a QR code / share it; it works once, until [expiresAt]. */
@@ -552,12 +565,35 @@ class SyncEngine(
     /** One refresh. Returns [SyncResult.Busy] at once if another is running. */
     suspend fun sync(): SyncResult = exclusive { runSync() }
 
-    /** Downloads one file's bytes now (opening a document whose bytes have not arrived yet). True when they are here. */
+    /**
+     * Downloads one file's bytes now (opening a document whose bytes have not arrived yet), if the relay still holds them.
+     * True when they are here. A download is acknowledged once stored and checked, like one made by the sync.
+     */
     suspend fun fetchFile(id: String): Boolean {
         if (files.has(id)) return true
         val (fam, want) = book.read { db -> Membership.famOf(db) to SyncModel.liveFiles(db).firstOrNull { it.id == id } }
         if (fam == null || want == null) return false
-        return runCatching { download(fam, want) == 1 }.getOrDefault(false)
+        return runCatching {
+            val got = download(fam, want) == 1
+            if (got) relay.blobAck(fam.cred, id)          // best effort: the next sync acknowledges it otherwise
+            got
+        }.getOrDefault(false)
+    }
+
+    /**
+     * "Ask for this file": this phone lacks [id]'s bytes and the relay no longer holds them (collected or expired). The ask
+     * reaches every other member; a phone that holds the bytes uploads them again on its next sync, for 30 days. When the
+     * relay does still hold them, this phone is simply added to those owed them and fetches them at once ([FileAsk.Here]).
+     */
+    suspend fun askForFile(id: String): FileAsk {
+        if (files.has(id)) return FileAsk.Here
+        val (fam, want) = book.read { db -> Membership.famOf(db) to SyncModel.liveFiles(db).firstOrNull { it.id == id } }
+        if (fam == null) return FileAsk.NoFamily
+        if (want == null) return FileAsk.Failed(SyncError.Refused)
+        return when (val r = relay.fileAsk(fam.cred, id)) {
+            is RelayResult.Err -> FileAsk.Failed(r.error)
+            is RelayResult.Ok -> if (r.value == "ready" && fetchFile(id)) FileAsk.Here else FileAsk.Asked
+        }
     }
 
     private suspend fun withLockOrFalse(block: suspend () -> Boolean): Boolean {
@@ -756,26 +792,46 @@ class SyncEngine(
                 book.edit { db -> checkFamily(db, f); SyncModel.afterPush(db, chunk.map { it.first }) }
                 pushed += chunk.size
             }
+        }
 
-            // 5. files up
+        // 5. files: what this member is owed, and what others asked for (docs/DESIGN.md "Files")
+        var filesDown = 0
+        val list = relay.files(fam.cred).orStop()
+        if (!waiting) {
+            val f = fam
+            val enc = f.encKey(f.relayEpoch)!!
             val plan = book.read { SyncModel.planBlobs(it) }
             if (plan.drop.isNotEmpty()) book.edit { db -> plan.drop.forEach { SyncModel.blobsUp(db).remove(it) } }
-            for (id in plan.upload) {
+            // asked for by someone: offered again from the bytes held here (never a private file: planBlobs' rule)
+            val again = book.read { db -> SyncModel.shareable(db, list.asks) }.filter { it !in plan.upload }
+            val ups = plan.upload + again
+            up@ for ((i, id) in ups.withIndex()) {
                 val bytes = files.read(id) ?: continue
+                val sha = book.read { db -> SyncModel.findRecord(db, id)?.rec?.s("sha256") }
+                if (sha == null || SyncCrypto.sha256Hex(bytes) != sha) { skipped++; continue }      // only bytes that match the record
                 val data = withContext(cpu) { SyncCrypto.sealE(enc, f.relayEpoch, bytes, SyncCrypto.fileAad(f.id, id)) }
                 if (data.length > MAX_FILE_BLOB) { skipped++; continue }
-                relay.blobPut(f.cred, f.relayEpoch, id, data).orStop()
-                book.edit { db -> checkFamily(db, f); SyncModel.blobsUp(db).remove(id) }
+                when (val r = relay.blobPut(f.cred, f.relayEpoch, id, data)) {
+                    is RelayResult.Ok -> {}
+                    // the family's files in flight are at the cap: the rest wait (still queued) until others collect theirs
+                    is RelayResult.Err -> if (r.error == SyncError.Limit) { skipped += ups.size - i; break@up } else throw Stop(r.error)
+                }
+                if (id in plan.upload) book.edit { db -> checkFamily(db, f); SyncModel.blobsUp(db).remove(id) }
                 filesUp++
             }
         }
 
-        // 5b. files down
-        var filesDown = 0
-        val wants = book.read { SyncModel.liveFiles(it) }
-        for (w in wants) {
-            if (files.has(w.id)) continue
-            when (download(fam, w)) { 1 -> filesDown++; -1 -> skipped++ }
+        // 5b. files down: every file this member is owed, acknowledged once stored here and checked
+        for (id in list.owed) {
+            val (rec, want) = book.read { db -> SyncModel.findRecord(db, id) to SyncModel.liveFiles(db).firstOrNull { it.id == id } }
+            if (rec == null) continue                                      // its record has not arrived yet: next time
+            if (want == null || rec.kind != "file") { relay.blobAck(fam.cred, id).orStop(); continue }   // deleted here: not needed
+            val held = files.read(id)?.let { SyncCrypto.sha256Hex(it) == want.sha256 } == true
+            val got = if (held) 1 else download(fam, want)
+            when (got) {
+                1 -> { relay.blobAck(fam.cred, id).orStop(); if (!held) filesDown++ }
+                -1 -> skipped++
+            }
         }
 
         val f = fam
@@ -809,13 +865,18 @@ class SyncEngine(
         }
     }
 
-    /** 1 = stored, 0 = not on the relay yet, -1 = there but unusable (does not open, or the hash does not match). */
+    /**
+     * 1 = stored here and read back matching the record's SHA-256, 0 = not on the relay (any more), -1 = there but unusable (does
+     * not open, the hash does not match, or it could not be stored intact). Only 1 may be acknowledged to the relay.
+     */
     private suspend fun download(fam: Membership.Fam, w: SyncModel.FileWant): Int {
         val data = relay.blobGet(fam.cred, w.id).orStop() ?: return 0
         val bytes = withContext(cpu) {
             SyncCrypto.openE({ fam.encKey(it) }, data, SyncCrypto.fileAad(fam.id, w.id))?.takeIf { SyncCrypto.sha256Hex(it) == w.sha256 }
         } ?: return -1
-        files.write(w.id, bytes, w.mime)
+        try { files.write(w.id, bytes, w.mime) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { return -1 }
+        val back = files.read(w.id)
+        if (back == null || SyncCrypto.sha256Hex(back) != w.sha256) { runCatching { files.delete(w.id) }; return -1 }
         return 1
     }
 
@@ -837,6 +898,9 @@ class SyncEngine(
         /** The relay's limits (the tally_membership migration in supabase/migrations). */
         const val MAX_RECORD_BLOB = 65_536
         const val MAX_FILE_BLOB = 6 * 1024 * 1024
+        /** Files in flight on the relay per family (the tally_files_in_transit migration); a file is kept at most 30 days. */
+        const val MAX_FAMILY_BLOBS = 50 * 1024 * 1024
+        const val FILE_DAYS = 30
         private const val DAY = 24 * 60 * 60 * 1000L
     }
 }

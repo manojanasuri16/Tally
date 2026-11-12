@@ -221,6 +221,15 @@ object SyncModel {
         return BlobPlan(up, drop)
     }
 
+    /**
+     * Of [ids] (files someone asked for), those this phone may offer again: live file records that are not private. Whether the
+     * bytes are here is the engine's to check.
+     */
+    fun shareable(db: Obj, ids: List<String>): List<String> = ids.filter { id ->
+        val f = findRecord(db, id)
+        f != null && f.kind == "file" && !f.rec.b("deleted") && !isPrivate(db, "file", f.rec)
+    }
+
     class FileWant(val id: String, val sha256: String, val size: Long, val mime: String)
 
     /** Live file records (their bytes may or may not be on this phone yet). */

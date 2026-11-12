@@ -75,6 +75,93 @@ class SyncLiveTest {
         }
     }
 
+    /** Files in transit through the deployed relay: owed lists, acknowledgements, deletion, removal, "Ask for this file", the usage check. */
+    @Test fun liveFiles() {
+        assumeTrue("set TALLY_LIVE=1 to run against the deployed relay", System.getenv("TALLY_LIVE") == "1")
+        val url = prop("TALLY_SUPABASE_URL"); val key = prop("TALLY_SUPABASE_ANON_KEY")
+        assumeTrue(url.isNotBlank() && key.isNotBlank())
+        val relay = HttpRelay(url, key)
+        val cleanup = ArrayList<Cred>()
+        TestClock.start()
+        try { runBlocking { files(relay, url, key, cleanup) } } finally {
+            TestClock.stop()
+            runBlocking {
+                for (c in cleanup) {
+                    val r = relay.leave(c)
+                    if (r !is RelayResult.Ok && r != RelayResult.Err(SyncError.Unauthorised) && r != RelayResult.Err(SyncError.Removed)) note("cleanup ${c.familyId} ${c.memberId} -> $r (NOT cleaned)")
+                    else note("cleanup ${c.familyId} ${c.memberId} -> $r")
+                }
+            }
+            File("build/tally-live-files.txt").apply { parentFile?.mkdirs() }.writeText(log.toString())
+        }
+    }
+
+    private suspend fun files(relay: HttpRelay, url: String, key: String, cleanup: MutableList<Cred>) {
+        fun credOf(p: Phone) = Cred(p.db.o("family").s("id"), p.me, p.db.o("family").o("me").s("secret"))
+        suspend fun owed(p: Phone) = (relay.files(credOf(p)) as RelayResult.Ok).value.owed
+        val photo = ByteArray(2000) { (it * 7).toByte() }
+        val a = Phone("A", relay); val b = Phone("B", relay); val c = Phone("C", relay); val d = Phone("D", relay)
+        a.loan("l1", "Live loan"); a.payment("p1", "l1", 10)
+        note("A create -> ${a.engine.createFamily("Live files")}")
+        cleanup.add(credOf(a))
+        note("B join -> ${b.joinVia(a)}"); cleanup.add(credOf(b))
+        note("C join -> ${c.joinVia(a)}"); cleanup.add(credOf(c))
+        a.file("f1", "payment", "p1", photo)
+        note("A sync (uploads f1) -> ${a.sync()}")
+        note("owed to B ${owed(b)}, to C ${owed(c)}, to A ${owed(a)}")
+        assertEquals(listOf("f1"), owed(b)); assertEquals(listOf("f1"), owed(c)); assertEquals(emptyList<String>(), owed(a))
+        note("B sync -> ${b.sync()}")
+        assertArrayEquals(photo, b.files.bytes["f1"])
+        assertEquals(emptyList<String>(), owed(b))
+        assertNotNull((relay.blobGet(credOf(a), "f1") as RelayResult.Ok).value)
+        note("C sync -> ${c.sync()}")
+        assertArrayEquals(photo, c.files.bytes["f1"])
+        val after = relay.blobGet(credOf(a), "f1"); note("blob get after B and C collected it -> $after")
+        assertEquals(RelayResult.Ok(null), after)
+
+        // a member who joins later is not owed it, asks, and a holder (not the one who added it) sends it again
+        note("D join -> ${d.joinVia(a)}"); cleanup.add(credOf(d))
+        assertNull(d.files.bytes["f1"])
+        assertFalse(d.engine.fetchFile("f1"))
+        val asked = d.engine.askForFile("f1"); note("D asks for f1 -> $asked")
+        assertEquals(FileAsk.Asked, asked)
+        note("files as B -> ${relay.files(credOf(b))}")
+        assertEquals(listOf("f1"), (relay.files(credOf(b)) as RelayResult.Ok).value.asks)
+        assertEquals(emptyList<String>(), (relay.files(credOf(d)) as RelayResult.Ok).value.asks)   // not one's own ask
+        note("B sync (offers f1 again) -> ${b.sync()}")
+        assertEquals(listOf("f1"), owed(d)); assertEquals(emptyList<String>(), owed(c))
+        note("D sync -> ${d.sync()}")
+        assertArrayEquals(photo, d.files.bytes["f1"])
+        assertEquals(RelayResult.Ok(null), relay.blobGet(credOf(a), "f1"))
+
+        // removing a member drops what it was owed
+        a.file("f2", "payment", "p1", byteArrayOf(4, 4, 4))
+        note("A sync (uploads f2) -> ${a.sync()}")
+        val credC = credOf(c)
+        note("A removes C -> ${a.engine.removeMember(c.me)}")
+        cleanup.remove(credC)
+        note("B, D sync -> ${b.sync()}, ${d.sync()}")
+        val gone = relay.blobGet(credOf(a), "f2"); note("f2 after B and D (C removed) -> $gone")
+        assertEquals(RelayResult.Ok(null), gone)
+
+        // the calls need a member's credential; an ask needs a file the family has
+        val wrong = Cred(credOf(a).familyId, a.me, Membership.newCredential())
+        assertEquals(RelayResult.Err(SyncError.Unauthorised), relay.files(wrong).also { note("files, wrong secret -> $it") })
+        assertEquals(RelayResult.Err(SyncError.Unauthorised), relay.blobAck(wrong, "f1"))
+        assertEquals(RelayResult.Err(SyncError.Unauthorised), relay.fileAsk(wrong, "f1"))
+        assertEquals(RelayResult.Err(SyncError.Removed), relay.files(credC).also { note("files, removed C -> $it") })
+        assertEquals(RelayResult.Err(SyncError.Refused), relay.fileAsk(credOf(a), "nope").also { note("ask for an unknown file -> $it") })
+
+        // the storage check: no credentials, totals only
+        val (ucode, utext) = raw("POST", "$url/rest/v1/rpc/tally_relay_usage", key, "{}")
+        note("POST /rest/v1/rpc/tally_relay_usage -> $ucode $utext")
+        assertEquals(200, ucode)
+        assertEquals(setOf("db_bytes", "limit_bytes", "percent", "blob_bytes"), JsonCodec.parseObj(utext).keys)
+        val (pcode, ptext) = raw("POST", "$url/rest/v1/rpc/tally_ping", key, "{}")
+        note("POST /rest/v1/rpc/tally_ping -> $pcode $ptext")
+        assertEquals(200, pcode)
+    }
+
     private suspend fun rejoin(relay: HttpRelay, url: String, key: String, cleanup: MutableList<Cred>) {
         fun credOf(p: Phone) = Cred(p.db.o("family").s("id"), p.me, p.db.o("family").o("me").s("secret"))
         val a = Phone("A", relay); val b = Phone("B", relay)
@@ -166,7 +253,7 @@ class SyncLiveTest {
         assertTrue(big is RelayResult.Err && big.error is SyncError.BadData)
         val data = SyncCrypto.sealE(enc, 1, ByteArray(1000) { it.toByte() }, SyncCrypto.fileAad(fam, "b1"))
         note("blob put -> ${relay.blobPut(me, 1, "b1", data)}")
-        assertEquals(RelayResult.Ok(data), relay.blobGet(me, "b1"))
+        assertEquals(RelayResult.Ok(null), relay.blobGet(me, "b1").also { note("blob get, family of one (nobody owed it, not kept) -> $it") })
         assertEquals(RelayResult.Ok(null), relay.blobGet(me, "nope"))
 
         // an unknown invite, and a request without one
@@ -175,6 +262,7 @@ class SyncLiveTest {
 
         // ---- the anon key reaches no table directly, and no private helper
         for (t in listOf("tally_family", "tally_member", "tally_invite", "tally_request", "tally_box", "tally_record", "tally_blob",
+                         "tally_blob_owed", "tally_file_ask",
                          "tally_families", "tally_records", "tally_blobs")) {
             val (code, text) = raw("GET", "$url/rest/v1/$t?select=*", key)
             note("GET /rest/v1/$t -> $code $text")
@@ -183,7 +271,7 @@ class SyncLiveTest {
         val (icode, itext) = raw("POST", "$url/rest/v1/tally_member", key, """{"family_id":"$fam","id":"m-evil","secret_hash":"${"0".repeat(64)}","role":"admin"}""")
         note("POST /rest/v1/tally_member -> $icode $itext")
         assertTrue(icode == 401 || icode == 403 || icode == 404)
-        for (fn in listOf("tally_member_auth", "tally_admin_auth", "tally_put_boxes", "tally_new_epoch")) {
+        for (fn in listOf("tally_member_auth", "tally_admin_auth", "tally_put_boxes", "tally_new_epoch", "tally_blob_sweep")) {
             val (acode, atext) = raw("POST", "$url/rest/v1/rpc/$fn", key, """{"p_family":"$fam","p_member":"m-live-a","p_secret":"$secret"}""")
             note("POST /rest/v1/rpc/$fn (private helper) -> $acode ${atext.take(120)}")
             assertTrue(acode >= 400)
@@ -219,7 +307,7 @@ class SyncLiveTest {
             note("C join -> ${c.joinVia(a)}")
             val credC = Cred(fa, c.me, c.db.o("family").o("me").s("secret"))
             cleanup.add(credC)
-            assertArrayEquals(byteArrayOf(5, 6, 7), b.files.bytes["f1"])
+            assertNull(b.files.bytes["f1"])                 // added before B joined: B is not owed it (files are in transit only)
 
             // role checks on the relay itself
             val (rc, rt) = raw("POST", "$url/rest/v1/rpc/tally_member_role", key,

@@ -42,8 +42,11 @@ class SyncEngineTest {
         assertEquals(1, a.db.objs("members").size)
 
         val r = done(b.joinVia(a, invite))
-        assertEquals(1, r.filesDown)
-        assertArrayEquals(byteArrayOf(1, 2, 3, 4), b.files.bytes["f1"])
+        // f1 was added before B joined: B is not owed it (it stays on A's phone and in A's backups), and A alone stored nothing
+        assertEquals(0, r.filesDown)
+        assertNull(b.files.bytes["f1"])
+        assertNotNull(b.rec("files", "f1"))
+        assertTrue(relay.blobs[a.db.o("family").s("id")]!!.isEmpty())
         assertEquals("SBI home loan", b.rec("loans", "l1")!!.s("name"))
         assertEquals(2, b.db.objs("members").size)
         done(a.sync())
@@ -228,7 +231,8 @@ class SyncEngineTest {
         done(runBlocking { a.engine.createFamily("Again") })
         val fid = a.db.o("family").s("id")
         assertNotNull(relay.records[fid]!!["p5"])
-        assertNotNull(relay.blobs[fid]!!["f1"])
+        assertTrue(relay.blobs[fid]!!.isEmpty())                        // nobody else to send f1 to: the relay keeps no bytes
+        assertTrue(a.db.o("sync").o("blobsUp")!!.isEmpty())
     }
 
     @Test fun aPrivatePaymentsFileIsNeverUploadedAndStaysQueued() {
@@ -246,7 +250,7 @@ class SyncEngineTest {
         a.edit("loans", "lp") { it["private"] = false }
         listOf("pp", "fpp").forEach { a.db.oo("sync").oo("dirty")[it] = true }
         done(a.sync())
-        assertNotNull(relay.blobs[fid]!!["fpp"])
+        assertNull(relay.blobs[fid]!!["fpp"])                           // a family of one: nobody is owed it, so nothing is kept
         assertFalse(a.db.o("sync").o("blobsUp")!!.b("fpp"))
     }
 

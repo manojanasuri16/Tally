@@ -10,7 +10,8 @@ import java.time.LocalDateTime
  * An in-memory relay with the SQL functions' semantics (supabase/migrations, the tally_membership migration): per-member
  * credentials (only hashes kept), roles and statuses, the epoch rule on writes, one-time invites, requests, key boxes,
  * the role rules (last admin, the creator, removing yourself), limits, and a global seq taken at upsert. Each call is atomic,
- * as the family lock makes them on the real relay.
+ * as the family lock makes them on the real relay. Files in transit as in the tally_files_in_transit migration: who is owed
+ * each file (the then-active members but the uploader, or the askers), acknowledgements, 30 days, asks, the per-family cap.
  */
 class FakeRelay : Relay {
     class Row(val kind: String, val blob: String, val seq: Long)
@@ -29,6 +30,18 @@ class FakeRelay : Relay {
     val fams = HashMap<String, Fam>()
     val records = HashMap<String, LinkedHashMap<String, Row>>()
     val blobs = HashMap<String, HashMap<String, String>>()
+    /** tally_blob's uploader and expires_at, per family and file id. */
+    class BlobMeta(val uploader: String, var expires: Long)
+    val blobMeta = HashMap<String, HashMap<String, BlobMeta>>()
+    /** tally_blob_owed: per family, file id -> members still owed it. */
+    val owed = HashMap<String, HashMap<String, MutableSet<String>>>()
+    /** tally_file_ask: per family, file id -> (member -> when asked). */
+    val asks = HashMap<String, HashMap<String, HashMap<String, Long>>>()
+    /** Files in flight per family (50 MiB in SQL; a test may lower it). */
+    var blobCap = SyncEngine.MAX_FAMILY_BLOBS.toLong()
+    /** A broken relay that hands out these bytes instead of the stored ones. */
+    var corruptBlob: ((String) -> String)? = null
+    val acks = ArrayList<Pair<String, String>>()
     private var seq = 0L
     private var joinOrder = 0L
 
@@ -73,6 +86,25 @@ class FakeRelay : Relay {
     }
     private fun admin(c: Cred): Pair<Fam, Member> { val p = auth(c); if (p.second.role != "admin") fail(SyncError.NotAdmin); return p }
     private fun active(f: Fam) = f.members.values.filter { it.status == "active" }
+    private val DAYS30 = 30 * 24 * 3600_000L
+
+    /** tally_blob_sweep: files nobody is owed or past their 30 days go; asks older than 30 days go. */
+    private fun sweep(famId: String) {
+        val b = blobs[famId] ?: return
+        val o = owed.getOrPut(famId) { HashMap() }; val m = blobMeta.getOrPut(famId) { HashMap() }
+        for (id in b.keys.toList()) if (o[id].isNullOrEmpty() || (m[id]?.expires ?: 0) <= now()) { b.remove(id); o.remove(id); m.remove(id) }
+        asks[famId]?.values?.forEach { it.values.removeIf { at -> at <= now() - DAYS30 } }
+        asks[famId]?.values?.removeIf { it.isEmpty() }
+    }
+    fun blobBytes(famId: String): Long = blobs[famId]?.values?.sumOf { it.length.toLong() } ?: 0L
+    /** The trigger on tally_member: someone no longer active is owed nothing and asks for nothing. */
+    private fun memberGone(f: Fam, id: String) {
+        owed[f.id]?.values?.forEach { it.remove(id) }
+        asks[f.id]?.values?.forEach { it.remove(id) }
+        sweep(f.id)
+    }
+    /** tally_ping's file part, with the clock as it stands. */
+    fun ping() { blobs.keys.toList().forEach { sweep(it) } }
     private fun tidy(f: Fam) {
         f.requests.values.removeIf { it.expires < now() }
         f.invites.values.removeIf { it.expires < now() && !f.requests.containsKey(it.id) }
@@ -105,6 +137,7 @@ class FakeRelay : Relay {
         val f = Fam(familyId, memberId)
         f.members[memberId] = Member(memberId, secretHash, noticeHash, "admin", "active", 1, ++joinOrder)
         fams[familyId] = f
+        blobs[familyId] = HashMap()
         Unit
     }
 
@@ -149,15 +182,64 @@ class FakeRelay : Relay {
     }
 
     override suspend fun blobPut(c: Cred, epoch: Int, id: String, data: String) = r("blobPut") {
-        val (f, _) = auth(c)
+        if (data.isEmpty() || data.length > 6 * 1024 * 1024) fail(SyncError.BadData("data"))
+        val (f, me) = auth(c)
         if (epoch != f.epoch) fail(SyncError.Stale)
-        blobs.getOrPut(f.id) { HashMap() }[id] = data
+        sweep(f.id)
+        val b = blobs.getOrPut(f.id) { HashMap() }; val o = owed.getOrPut(f.id) { HashMap() }
+        val m = blobMeta.getOrPut(f.id) { HashMap() }; val a = asks.getOrPut(f.id) { HashMap() }
+        // all or nothing, like the SQL transaction (the cap check comes last)
+        val saved = Triple(b[id], o[id]?.toMutableSet(), m[id]); val savedAsks = a[id]?.let { HashMap(it) }
+        val existed = id in b
+        val askers = a[id]?.keys?.filter { it != me.id && f.members[it]?.status == "active" }.orEmpty()
+        b[id] = data; m[id] = BlobMeta(me.id, now() + DAYS30)
+        if (askers.isNotEmpty()) o.getOrPut(id) { HashSet() }.addAll(askers)
+        else if (!existed) o[id] = active(f).map { it.id }.filter { it != me.id }.toMutableSet()
+        a.remove(id)
+        sweep(f.id)
+        if (blobBytes(f.id) > blobCap) {
+            if (saved.first != null) { b[id] = saved.first!!; o[id] = saved.second ?: HashSet(); m[id] = saved.third!! } else { b.remove(id); o.remove(id); m.remove(id) }
+            if (savedAsks != null) a[id] = savedAsks
+            fail(SyncError.Limit)
+        }
         Unit
     }
 
     override suspend fun blobGet(c: Cred, id: String): RelayResult<String?> {
         blobGets++
-        return r("blobGet") { val (f, _) = auth(c); blobs[f.id]?.get(id) }
+        return r("blobGet") {
+            val (f, _) = auth(c)
+            val d = blobs[f.id]?.get(id)?.takeIf { (blobMeta[f.id]?.get(id)?.expires ?: 0) > now() }
+            if (d != null) corruptBlob?.invoke(d) ?: d else null
+        }
+    }
+
+    override suspend fun blobAck(c: Cred, id: String) = r("blobAck") {
+        val (f, me) = auth(c)
+        owed[f.id]?.get(id)?.remove(me.id)
+        asks[f.id]?.get(id)?.remove(me.id)
+        acks.add(me.id to id)
+        sweep(f.id)
+        Unit
+    }
+
+    override suspend fun fileAsk(c: Cred, id: String) = r("fileAsk") {
+        val (f, me) = auth(c)
+        if (records[f.id]?.get(id)?.kind != "file") fail(SyncError.Refused)
+        sweep(f.id)
+        if (blobs[f.id]?.containsKey(id) == true) { owed.getOrPut(f.id) { HashMap() }.getOrPut(id) { HashSet() }.add(me.id); return@r "ready" }
+        val a = asks.getOrPut(f.id) { HashMap() }
+        if (a[id]?.containsKey(me.id) != true && a.values.sumOf { it.size } >= 500) fail(SyncError.Limit)
+        a.getOrPut(id) { HashMap() }[me.id] = now()
+        "asked"
+    }
+
+    override suspend fun files(c: Cred) = r("files") {
+        val (f, me) = auth(c)
+        sweep(f.id)
+        val mine = owed[f.id].orEmpty().filter { me.id in it.value }.keys
+        val others = asks[f.id].orEmpty().filter { (_, who) -> who.keys.any { it != me.id && f.members[it]?.status == "active" } }.keys
+        RelayFiles(blobs[f.id].orEmpty().keys.filter { it in mine }.sortedBy { blobMeta[f.id]?.get(it)?.expires }, others.sorted())
     }
 
     override suspend fun inviteCreate(c: Cred, inviteId: String, box: String) = r("inviteCreate") {
@@ -292,6 +374,7 @@ class FakeRelay : Relay {
         val before = f.members[target]!!.status
         f.members[target]!!.status = "removed"
         try { newEpoch(f, me.id, epoch, boxes) } catch (x: E) { f.members[target]!!.status = before; throw x }
+        memberGone(f, target)
         Unit
     }
 
@@ -311,11 +394,12 @@ class FakeRelay : Relay {
     override suspend fun leave(c: Cred) = r("leave") {
         val (f, me) = auth(c)
         me.status = "left"; me.role = "member"
+        memberGone(f, me.id)
         val mine = f.invites.values.filter { it.by == me.id }.map { it.id }
         mine.forEach { f.invites.remove(it); f.requests.remove(it) }
         if (f.creator == me.id) f.creator = null
         if (active(f).isEmpty()) {
-            fams.remove(f.id); records.remove(f.id); blobs.remove(f.id)
+            fams.remove(f.id); records.remove(f.id); blobs.remove(f.id); owed.remove(f.id); asks.remove(f.id); blobMeta.remove(f.id)
             return@r "deleted"
         }
         if (active(f).none { it.role == "admin" }) active(f).minBy { it.joined }.role = "admin"
@@ -352,9 +436,13 @@ class MemBook(var db: Obj = obj("v" to 1)) : SyncBook {
 
 class MemFiles : LocalFiles {
     val bytes = HashMap<String, ByteArray>()
+    /** A phone whose storage damages what it writes (the read-back check must catch it). */
+    var corruptWrites = false
     override suspend fun has(id: String) = id in bytes
     override suspend fun read(id: String) = bytes[id]
-    override suspend fun write(id: String, bytes: ByteArray, mime: String) { this.bytes[id] = bytes }
+    override suspend fun write(id: String, bytes: ByteArray, mime: String) {
+        this.bytes[id] = if (corruptWrites) bytes.copyOf().also { if (it.isNotEmpty()) it[0] = (it[0] + 1).toByte() } else bytes
+    }
     override suspend fun delete(id: String) { bytes.remove(id) }
 }
 

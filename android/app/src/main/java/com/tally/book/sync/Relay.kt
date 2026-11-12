@@ -64,6 +64,11 @@ data class RelayInvite(val id: String, val by: String, val expiresAt: Long)
 data class RelayRequest(val inviteId: String, val memberId: String, val blob: String, val at: Long, val expiresAt: Long, val inviteBox: String, val invitedBy: String)
 /** What tally_join_check says: "approved" | "pending" | "denied" | "removed", and the member id it is about. */
 data class JoinCheck(val status: String, val member: String)
+/**
+ * What tally_files says to one member: [owed] the files the relay holds that this member still has to fetch (oldest first),
+ * [asks] the files other members asked for ("Ask for this file") that the relay does not hold.
+ */
+data class RelayFiles(val owed: List<String>, val asks: List<String>)
 /** A key box for one member, as sent with a rotation, an approval or a repair. */
 data class BoxFor(val member: String, val box: String)
 
@@ -82,6 +87,12 @@ interface Relay {
     suspend fun pull(c: Cred, since: Long, max: Int): RelayResult<List<RelayRow>>
     suspend fun blobPut(c: Cred, epoch: Int, id: String, data: String): RelayResult<Unit>
     suspend fun blobGet(c: Cred, id: String): RelayResult<String?>
+    /** This phone stored [id]'s bytes and checked them: the member is no longer owed it (the relay deletes it once nobody is). */
+    suspend fun blobAck(c: Cred, id: String): RelayResult<Unit>
+    /** "Ask for this file": "ready" (the relay still holds it; fetch now) or "asked" (a phone that has it uploads it again). */
+    suspend fun fileAsk(c: Cred, id: String): RelayResult<String>
+    /** The files this member is owed, and the files others asked for. */
+    suspend fun files(c: Cred): RelayResult<RelayFiles>
     /** Registers a one-time invite; returns when it expires (epoch ms). */
     suspend fun inviteCreate(c: Cred, inviteId: String, box: String): RelayResult<Long>
     suspend fun inviteCancel(c: Cred, inviteId: String): RelayResult<Unit>
@@ -177,6 +188,18 @@ class HttpRelay(
         call("tally_blob_get", cred(c, "p_id" to id)) { v ->
             when (v) { null -> null; is String -> v; else -> throw BadResponse("blob: not text") }
         }
+
+    override suspend fun blobAck(c: Cred, id: String): RelayResult<Unit> =
+        call("tally_blob_ack", cred(c, "p_id" to id)) { }
+
+    override suspend fun fileAsk(c: Cred, id: String): RelayResult<String> =
+        call("tally_file_ask", cred(c, "p_id" to id)) { v -> text(v, "ask") }
+
+    override suspend fun files(c: Cred): RelayResult<RelayFiles> = call("tally_files", cred(c)) { v ->
+        val o = v.asObj() ?: throw BadResponse("files: not an object")
+        fun ids(k: String) = (o.a(k) ?: throw BadResponse("files: no $k")).map { text(it, k) }
+        RelayFiles(ids("owed"), ids("asks"))
+    }
 
     override suspend fun inviteCreate(c: Cred, inviteId: String, box: String): RelayResult<Long> =
         call("tally_invite_create", cred(c, "p_invite" to inviteId, "p_box" to box)) { v -> long(v, "invite") }

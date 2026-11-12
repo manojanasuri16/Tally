@@ -32,15 +32,15 @@ class SyncRestoreTest {
         p.engine.resetState()
     }
 
-    /** The family: A with a shared loan (l1, p1, f1) and l2, B joined; both synced. */
+    /** The family: A with a shared loan (l1, p1, f1) and l2, B joined; both synced, so both phones hold f1 and the relay none. */
     private fun family(a: Phone, b: Phone) {
         a.loan("l1", "SBI home loan")
         a.loan("l2", "Gold loan")
         a.payment("p1", "l1", 23000)
-        a.file("f1", "payment", "p1", byteArrayOf(1, 2, 3, 4))
         done(runBlocking { a.engine.createFamily("Home") })
         done(b.joinVia(a))
-        done(a.sync())
+        a.file("f1", "payment", "p1", byteArrayOf(1, 2, 3, 4))
+        done(a.sync()); done(b.sync())
     }
 
     private fun sharedWithout(p: Phone, vararg ids: String): String = JsonCodec.stringify(obj(*listOf("loans", "payments", "files", "members").map { k ->
@@ -130,19 +130,25 @@ class SyncRestoreTest {
         assertEquals(1, c.db.objs("members").count { !it.b("deleted") && it.s("id") == "m-A" })
     }
 
-    @Test fun aFileWhoseBytesAreMissingAfterARestoreIsFetchedAsUsual() {
+    @Test fun aFileWhoseBytesAreMissingAfterARestoreIsAskedForAndComesBack() {
         val a = Phone("A", relay); val b = Phone("B", relay)
         family(a, b)
+        assertArrayEquals(byteArrayOf(1, 2, 3, 4), b.files.bytes["f1"])
+        val fid = a.db.o("family").s("id")
+        assertTrue(relay.blobs[fid]!!.isEmpty())                           // B collected it: the relay let it go
         val snap = backup(a)
         val c = Phone("C", relay)
         restore(c, snap, withFiles = false)
         assertNull(c.files.bytes["f1"])
-        assertTrue(runBlocking { c.engine.fetchFile("f1") })               // on first open
-        assertArrayEquals(byteArrayOf(1, 2, 3, 4), c.files.bytes["f1"])
-        c.files.bytes.clear()
-        val r = done(c.sync())                                             // or by the sync itself
+        assertFalse(runBlocking { c.engine.fetchFile("f1") })              // on first open: not on the relay any more
+        assertEquals(FileAsk.Asked, runBlocking { c.engine.askForFile("f1") })
+        done(b.sync())                                                     // B holds it and offers it again, owed to the asker only
+        assertNotNull(relay.blobs[fid]!!["f1"])
+        assertEquals(setOf("m-A"), relay.owed[fid]!!["f1"])
+        val r = done(c.sync())                                             // the restored phone fetches it, checks it, says so
         assertEquals(1, r.filesDown)
         assertArrayEquals(byteArrayOf(1, 2, 3, 4), c.files.bytes["f1"])
+        assertTrue(relay.blobs[fid]!!.isEmpty())
     }
 
     @Test fun theRestoreMarkNeedsAFamilyAndOutlivesAFailedSync() {
