@@ -407,21 +407,41 @@ fun EditSheet(
     title: String, onDismiss: () -> Unit, onSave: (() -> Unit)?, saveLabel: String = t("dlg.save", "Save"),
     saveEnabled: Boolean = true, onDelete: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit,
 ) {
-    // A form is not closed by a drag or a stray tap outside: Material's sheet dismissed after a short pull (or a pull while
-    // scrolling the form back to the top) and threw the typed entry away. The sheet refuses to hide unless X, Cancel or Back
-    // asked for it, so a drag springs back. It has no grabber, since it no longer drags. A sheet with nothing to save keeps both.
+    // A form closes from a drag only when it is pulled well down: Material's sheet hid after a short pull (56 dp) or any quick
+    // flick, which threw a half-typed entry away, often while scrolling the form back to the top. When a drag ends, the sheet
+    // is allowed to hide only if it has travelled at least a third of its height (and 160 dp); otherwise it springs back.
+    // A tap outside does nothing on a form. X, Cancel and Back always close. A sheet with nothing to save keeps Material's feel.
     val form = onSave != null
     val closing = remember { mutableStateOf(false) }
-    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { it != SheetValue.Hidden || !form || closing.value })
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val minPull = with(density) { 160.dp.toPx() }
+    val screen = with(density) { androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp.toPx() }
+    val restAt = remember { mutableFloatStateOf(Float.NaN) }   // the sheet's offset when it sits fully open
+    val holder = remember { arrayOfNulls<SheetState>(1) }
+    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { target ->
+        if (target != SheetValue.Hidden || !form || closing.value) true
+        else {
+            val st = holder[0]; val rest = restAt.floatValue
+            val now = st?.let { runCatching { it.requireOffset() }.getOrNull() }
+            if (now == null || rest.isNaN()) false
+            else (now - rest) >= maxOf(minPull, (screen - rest) / 3f)
+        }
+    })
+    holder[0] = state
+    LaunchedEffect(state) {
+        snapshotFlow { state.currentValue to state.targetValue }.collect { (cur, tgt) ->
+            if (cur == SheetValue.Expanded && tgt == SheetValue.Expanded) runCatching { state.requireOffset() }.getOrNull()?.let { restAt.floatValue = it }
+        }
+    }
     val close = { closing.value = true; onDismiss() }
     val haptics = rememberHaptics()
     val negative = LocalSemantic.current.negative
     ModalBottomSheet(
         // a tall sheet stops below the status bar: under it, the system takes the taps meant for Cancel and Save
         modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars.only(WindowInsetsSides.Top)),
-        onDismissRequest = onDismiss, sheetState = state, containerColor = Apple.colors.elevated, shape = AppleShapes.sheet,
+        onDismissRequest = { if (!form || closing.value || state.currentValue == SheetValue.Hidden) onDismiss() }, sheetState = state, containerColor = Apple.colors.elevated, shape = AppleShapes.sheet,
         tonalElevation = 0.dp, scrimColor = Color.Black.copy(alpha = 0.35f),
-        dragHandle = if (form) ({ Spacer(Modifier.height(12.dp)) }) else ({ Grabber() }),
+        dragHandle = { Grabber() },
     ) {
         if (form) androidx.activity.compose.BackHandler { close() }
         ElevatedLevel {
