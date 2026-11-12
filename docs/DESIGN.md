@@ -179,7 +179,7 @@ A member who lost or replaced their phone comes back **as the same person** (sam
 **Private entries and old files** are not on the relay; they come back only from a backup. **Recommended order: restore first, then come back** (the Join screen says "Have a backup from your old phone? Restore it first from the welcome screen."):
 - *Restore first:* the restored phone is the old member at once (same credentials), so it syncs. To retire the old phone (lost or stolen), it then asks to come back with a fresh invite and the box ticked: allowed while it holds that same family, it keeps syncing as before while it waits, and on approval only its credentials, keys and pins change (`Membership.reseat`); records, private loans and sync state stay. If the member had already been replaced or removed, the first sync says so and forgets the family (records kept), and the person comes back as above.
 - *Come back first, then restore:* restoring the old phone's backup would bring back replaced credentials. So a restore keeps this phone's newer place in the family when both books are the same member of the same family and this phone's credentials are newer (`Membership.keepNewerSeat`, by `family.me.at`): the backup's loans, payments and private entries come in, with this phone's credentials and every key of both.
-- Shared files: a returning phone downloads what the relay still holds like any joining phone; it does not count on old files being there forever (files the relay no longer keeps come from the backup, or stay on the phones that have them).
+- Shared files: the member keeps owing files under the same member id, so the returning phone downloads whatever the relay still holds for that member; files the relay no longer holds come from the backup, or by "Ask for this file" from a phone that has them (see "Files").
 
 **The only admin.** Nobody but an admin can let a member back in, and a non-admin can never approve, not even when "no admin is active" (the relay cannot tell a lost phone from a quiet one, so that rule would let any member take over the creator). The safe rule chosen instead: when the only admin first has someone else in the family, their phone says once "Make someone else an admin too, in case you lose this phone." (`MemberText.needsSecondAdmin`, `DevicePrefs` `tally-admin-hint`). An only admin who loses their phone without a backup cannot be let back in, since nobody can approve (the others keep sharing as before, but nobody can be let in any more); with a backup, restoring it makes them the admin again, and they can then retire the old phone by coming back as themselves and approving it on the restored phone. The creator is re-claimed only by an admin's approval like anyone else, and stays the creator (same id).
 
@@ -197,12 +197,13 @@ The relay is trusted for availability only, never for confidentiality or for who
 - **Taking over a member** ("back on a new phone") needs an admin's approval on the relay (`tally_member_reclaim`, admins only, an open request from a fresh invite, an active target); nobody takes a place by themselves, and a non-admin never approves. The relay cannot move the place to another member (the grant is sealed and MAC'd for the member the admin picked, and the joining phone takes only that) nor replay a grant (bound to the invite's secret and the new phone's key). A thief holding a member's unlocked phone could make an invite and ask to "come back" as that member: the admin sees "<name> says they are back on a new phone. <inviter> invited them." and is asked to check with the person first.
 - **Re-pins** ride in key boxes, so a removed member colluding with the relay, holding an old key a phone still builds on, could forge one; this is the same out-of-scope collusion as hiding a rotation.
 - **A current member** can read everything they are given and write what they like (as in version 1); trust within the family is the point.
+- **Files in transit** (see "Files"): the relay learns which member is owed which file id, when each is collected, and who asked for which file id: the same kind of metadata as above (file ids were already visible as record ids of kind `file`). It still never sees a file's bytes, name or type. A hostile relay can drop a file early, or keep it past 30 days (it is sealed either way), or claim a member is owed a file: the phone fetches only bytes that open under the family key and match the record's SHA-256, and acknowledges nothing else. An ask is member-authenticated, carries only the file id, and is answered only from bytes a holder has checked against the record, never for a private loan's file. The usage call (`tally_relay_usage`, no credentials) gives only relay-wide totals.
 
 ### The relay (Supabase)
 
-`supabase/migrations/20261112013706_tally_membership.sql` (and `20261112020514_tally_not_admin_code.sql`, `20261112060000_tally_family_meta.sql`, `20261112105803_tally_rejoin.sql`). Row level security is on for every table with no policies and no grants to `anon`/`authenticated`, so the Data API reaches nothing directly. All access is through `security definer` functions in `public` with `search_path = ''`; helpers live in the unexposed `tally_private` schema.
+`supabase/migrations/20261112013706_tally_membership.sql` (and `20261112020514_tally_not_admin_code.sql`, `20261112060000_tally_family_meta.sql`, `20261112105803_tally_rejoin.sql`, `20261112111559_tally_files_in_transit.sql`). Row level security is on for every table with no policies and no grants to `anon`/`authenticated`, so the Data API reaches nothing directly. All access is through `security definer` functions in `public` with `search_path = ''`; helpers live in the unexposed `tally_private` schema.
 
-Tables: `tally_family` (id, creator, epoch, rotate, record_count, blob_bytes, meta), `tally_member` (family, id, secret_hash, notice_hash, role, status, has_epoch, joined_at), `tally_replaced` (family, member, secret_hash, replaced_at: credentials a new phone replaced), `tally_invite`, `tally_request`, `tally_box`, `tally_record`, `tally_blob`. The version-1 tables (`tally_families`, `tally_records`, `tally_blobs`, sequence `tally_seq`) are left in place with their rows, unreachable; a later migration can drop them.
+Tables: `tally_family` (id, creator, epoch, rotate, record_count, blob_bytes, meta), `tally_member` (family, id, secret_hash, notice_hash, role, status, has_epoch, joined_at), `tally_replaced` (family, member, secret_hash, replaced_at: credentials a new phone replaced), `tally_invite`, `tally_request`, `tally_box`, `tally_record`, `tally_blob` (family, id, data, uploader, created_at, expires_at), `tally_blob_owed` (family, file id, member: who still needs a file), `tally_file_ask` (family, file id, member, created_at: "Ask for this file"). A trigger on `tally_member` drops what a member is owed and has asked for when its status stops being `active`. The version-1 tables (`tally_families`, `tally_records`, `tally_blobs`, sequence `tally_seq`) are left in place with their rows, unreachable; a later migration can drop them.
 
 Functions (every `p_secret` is checked by hashing it and comparing with the member's `secret_hash`; an unknown family, unknown member, wrong secret or a member who left all give the same `28000`; a removed member gets `TA001`):
 
@@ -212,7 +213,10 @@ Functions (every `p_secret` is checked by hashing it and comparing with the memb
 | `tally_state(p_family, p_member, p_secret, p_after)` | member | epoch, creator, rotate, the sealed family name (`meta`, null until renamed), my role, active members (role, since, has), my boxes after `p_after`, live invites, open requests (admins only) |
 | `tally_family_meta_set(…, p_epoch, p_meta)` | admin | stores the sealed family name (at most 4096 characters); `p_epoch` must be the newest |
 | `tally_push(…, p_epoch, p_rows)` / `tally_pull(…, p_since, p_max)` | member | records, as in version 1; push refused unless `p_epoch` is the family's newest |
-| `tally_blob_put(…, p_epoch, p_id, p_data)` / `tally_blob_get(…, p_id)` | member | file blobs, same epoch rule |
+| `tally_blob_put(…, p_epoch, p_id, p_data)` / `tally_blob_get(…, p_id)` | member | a sealed file in transit, same epoch rule: kept 30 days for the members owed it (see "Files"); get answers null once it is gone |
+| `tally_files(p_family, p_member, p_secret)` → `{ owed, asks }` | member | the file ids this member is owed and the relay holds, and the ids other active members asked for (500 each at most) |
+| `tally_blob_ack(…, p_id)` | member | stored and checked here: no longer owed; the file goes once nobody is owed it |
+| `tally_file_ask(…, p_id)` → 'ready' / 'asked' | member | "Ask for this file": added to those owed when the relay still holds it, else an ask for holders (30 days); `TA004` for an id that is not a file record of the family |
 | `tally_invite_create(…, p_invite, p_box)` → expiry ms | member | one-time invite, 24 h |
 | `tally_invite_cancel(…, p_invite)` | its maker, or an admin | |
 | `tally_join_request(p_family, p_invite, p_member, p_secret_hash, p_notice_hash, p_blob)` → expiry ms | anyone with the invite id | uses the invite up; request kept 72 h |
@@ -227,7 +231,8 @@ Functions (every `p_secret` is checked by hashing it and comparing with the memb
 | `tally_box_put(…, p_epoch, p_boxes)` | admin | boxes for members who lack the newest |
 | `tally_leave(p_family, p_member, p_secret)` → 'left' / 'deleted' | member | |
 | `tally_pending(p_family, p_member, p_notice)` → count | the notice token | 0 unless an active admin |
-| `tally_ping()` → 1 | anyone | keep-awake; also deletes expired requests and invites |
+| `tally_ping()` → 1 | anyone | keep-awake; also deletes expired requests and invites, files past 30 days and old asks |
+| `tally_relay_usage()` → `{ db_bytes, limit_bytes, percent, blob_bytes }` | anyone | the daily storage check: relay-wide totals only, nothing per family |
 
 Error codes: `28000` unauthorised, `TA001` removed, `TA007` replaced by a new phone, `TA006` not an admin, `TA002` stale (sync and retry), `TA003` a limit, `TA004` a rule refuses, `TA005` invite or request not usable, `22023`/`54000` bad or too large input. (Not-an-admin was `42501` in the first migration; PostgREST sends that as HTTP 401, whose body `HttpURLConnection` drops for a fixed-length POST, so it became `TA006`.)
 
@@ -237,7 +242,7 @@ The phone talks to PostgREST with `HttpURLConnection` (no SDK). The project URL 
 
 ### Limits
 
-Chosen for a family app on Supabase's free tier (500 MB database), so that a stranger cannot fill it:
+Chosen for a family app on Supabase's free tier (500 MB database), so that a stranger cannot fill it. Files pass through only in transit, so the file cap is what a family can have **waiting** at once, not what it keeps; at the cap a phone keeps the rest queued and sends them on a later sync, once others have collected theirs. A daily GitHub check (`.github/workflows/keep-awake.yml`, after the ping) reads `tally_relay_usage` and fails the run, so GitHub emails the owner, when the whole database is above 70 % of 500 MB.
 
 | Limit | Value |
 |---|---|
@@ -245,7 +250,8 @@ Chosen for a family app on Supabase's free tier (500 MB database), so that a str
 | live (unused, unexpired) invites per family | 5 |
 | open join requests per family | 5 |
 | records per family | 20 000 |
-| file blobs per family | 100 MiB in total (a file blob at most 6 MiB) |
+| files in transit per family | 50 MiB at a time (a file at most 6 MiB sealed; a stored file at most 4 MB); each kept at most 30 days |
+| open "Ask for this file" requests per family | 500 (each kept 30 days) |
 | new families, across the whole relay | 20 per hour |
 | invite lifetime / request lifetime | 24 hours / 72 hours |
 | rows per push / per pull | 500 / 500 |
@@ -260,7 +266,7 @@ A join request needs a live invite id (derived from a secret only the QR has), s
 2. **Pull** everything with `seq > sync.cursor`; each row is opened with the key of the epoch in its header, then merged exactly as in version 1 (not dirty → take; dirty → last writer by `updatedAt`, then `updatedBy`). Member public keys in pulled records are pinned. The cursor moves in the same save as the page it covers.
 3. **An admin's phone:** rotates if the family is marked `rotate`, gives boxes to members lacking the newest key, and checks open join requests (`SyncEngine.requests`); requests that do not check out are turned down.
 4. **Push** every dirty record that is not private, sealed under the newest epoch, with that epoch (a phone that lacks the newest key pushes nothing).
-5. **Files:** upload the bytes of each id in `sync.blobsUp` (same epoch rule); download bytes for any live file that has none locally.
+5. **Files** (see "Files"): `tally_files` says which files this member is owed and which ones others asked for. Upload the bytes of each id in `sync.blobsUp`, and again those of any asked-for file this phone holds (same epoch rule); download every file this member is owed, and acknowledge each (`tally_blob_ack`) only once it is stored here and read back matching the record's SHA-256.
 
 On the wire a record is the sealed envelope `{ "k": "loan"|"payment"|"file"|"member", "r": { ...the record... } }`, as in version 1, and the merge, privacy and restore rules below are unchanged. A member record now also carries `pub` (that member's public key in this family), `invite` (the invite it came in with) and, once removed or gone, `left: true`.
 
@@ -274,7 +280,7 @@ Making a shared loan private pushes tombstones for the loan, its payments and it
 
 Sync runs when asked (pull to refresh, the Sync button), once each time the book becomes ready (app open or after unlock) if a family exists or a join is waiting, and after every membership action. A sync started from a screen runs in the app's own scope (`Sync.detached`), so closing the screen does not stop it halfway.
 
-A file's bytes are fetched on first open (`SyncEngine.fetchFile`). A private loan's files stay in `sync.blobsUp` and are never uploaded; a tombstoned file is dropped from the queue and never asked for.
+A file's bytes are also fetched on open while the relay holds them (`SyncEngine.fetchFile`). A private loan's files stay in `sync.blobsUp` and are never uploaded, nor offered again on an ask; a tombstoned file is dropped from the queue, and one owed but deleted here is acknowledged without being downloaded.
 
 ### Notices
 
@@ -304,9 +310,22 @@ A book whose `DB.family` has no `v: 2` (it has `key`) was made by 0.1.0/0.2.0. I
 
 ### Files
 
-- Stored locally as in Balance (`data/Files.kt`: byte-for-byte, SHA-256 checked).
+- Stored locally as in Balance (`data/Files.kt`: byte-for-byte, SHA-256 checked). **Each phone keeps its own copy** of every file it added or downloaded, and backups include them.
 - Photos taken or picked for a payment are scaled to at most 1600 px and saved as JPEG before they are stored, so the stored bytes are what syncs.
 - Documents keep their original bytes. Limit: 4 MB per file.
+
+**Files pass through the relay only in transit** (`supabase/migrations/20261112111559_tally_files_in_transit.sql`, `SyncEngine` step 5, mirrored by `FakeRelay`; tests `SyncFilesTest`). The relay's free tier has a 500 MB database, so it no longer keeps file bytes; the file **record** (name, size, SHA-256, owner, who added it) still syncs as an ordinary record for ever, so every phone knows every shared file exists.
+
+- **Upload.** A phone uploads each new shared file once (sealed as before). The relay stores it for 30 days and records who is **owed** it: every member active at that moment except the uploader (`tally_blob_owed`, by member id). A file nobody is owed (a family of one) is not kept at all.
+- **Download and acknowledgement.** Every sync asks `tally_files` for the files this member is owed and downloads all of them (they are small: photos are scaled; on Wi-Fi or mobile alike, within the family's limits). A file is acknowledged (`tally_blob_ack`) only after its bytes opened under the family key, matched the record's SHA-256, were stored, and read back matching again; a download that does not open, does not match or is not stored intact is not acknowledged (it is tried again next sync). A file this phone already holds, or has deleted, is acknowledged without downloading. Opening a file also fetches it while the relay holds it, and acknowledges it the same way.
+- **Deletion.** When nobody is owed a file any more, the relay deletes it in the same call. Anything not fully collected is deleted after 30 days regardless (swept by the family's next file call and by the daily `tally_ping`).
+- **Who is owed what.** Members who join later are **not** owed older files. A member who is removed or leaves is owed nothing any more (a trigger on `tally_member` drops their rows and their asks), so a file is not held for them. **A member back on a new phone** (`tally_member_reclaim`) keeps the same member id and stays active, so **they keep owing**: the new phone fetches what the old one had not collected (the owner's choice: the person, not the phone, is owed the file; a restored backup already has the bytes and simply acknowledges them).
+- **On someone's phone.** A phone that lacks a file's bytes (joined later, away more than 30 days, restored without files, or the file is simply not collected yet) shows it, with its name and the date it was added, as **"On <name>'s phone"** (the member who added it), or **"On your other phone"** when that member is this one; never as an error. A tap tries the relay first ("Getting the file…"); if the relay no longer holds it, it explains: "This file is kept on <name>'s phone and in their backups. Tally's server holds a file only until everyone in the family has it." and offers **Ask for this file** (only for a shared file while in a family; `ui/loans/FileAway.kt`).
+- **Ask for this file** (`SyncEngine.askForFile`, `tally_file_ask`). If the relay still holds the bytes, the asker is added to those owed and fetches them at once. Otherwise the ask is kept for 30 days and every other active member's sync sees it in `tally_files.asks`; **any** phone that holds the bytes (checked against the record) and for which the file is not private uploads them again, owed then to the askers only, for 30 days. The ask carries only the file id (already the record's id on the relay) and is authenticated with the member's credential like every call; there is nothing in it to seal. One asker's phone collecting the file acknowledges and closes its ask.
+- **Private** loans' files never leave the phone (unchanged): never uploaded, never offered on an ask.
+- **Limits:** at most 50 MiB of files in transit per family (`TA003` beyond it: the phone keeps the rest queued and tries again on a later sync), a sealed file at most 6 MiB, 500 open asks per family.
+- **On screen:** when files are added to a shared entry (a shared loan's Documents, or a payment's attachments while in a family) one quiet line sits under them: "Your family gets a copy. Each phone keeps its own; Tally's server holds it only until everyone has it." The words wrap (Easy mode, large text).
+- **The migration** cleared `tally_blob` (sealed test files without timestamps, so their age could not be told; there were none on 2026-11-12) and reset `blob_bytes`.
 
 ## Screens
 

@@ -1,5 +1,9 @@
 # Free Supabase projects pause after a week without activity. Four times a day, call the relay's tally_ping function
-# (it reads one row and returns 1) so the sync relay stays awake. Fails the run on anything but HTTP 200.
+# (it sweeps expired requests, invites and files, and returns 1) so the sync relay stays awake. Fails the run on anything
+# but HTTP 200.
+#
+# Then the storage check: tally_relay_usage (no credentials; totals only, nothing about any family) says how big the whole
+# database is against the free tier's 500 MB. Above 70 % the run fails with a plain message, so GitHub emails the owner.
 name: Keep the relay awake
 
 on:
@@ -25,3 +29,21 @@ jobs:
             -H "apikey: $KEY" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{}')
           echo "HTTP $code: $(head -c 200 body.txt)"
           [ "$code" = "200" ]
+
+      - name: Check the relay's storage (alert above 70 % of 500 MB)
+        env:
+          URL: ${{ secrets.TALLY_SUPABASE_URL }}
+          KEY: ${{ secrets.TALLY_SUPABASE_ANON_KEY }}
+        run: |
+          code=$(curl -sS -o usage.json -w '%{http_code}' --max-time 60 --retry 3 --retry-delay 10 --retry-all-errors \
+            -X POST "$URL/rest/v1/rpc/tally_relay_usage" \
+            -H "apikey: $KEY" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{}')
+          echo "HTTP $code: $(head -c 300 usage.json)"
+          [ "$code" = "200" ] || { echo "::error::Could not read the relay's storage (tally_relay_usage answered HTTP $code)."; exit 1; }
+          db=$(jq -r '.db_bytes' usage.json); limit=$(jq -r '.limit_bytes' usage.json); blobs=$(jq -r '.blob_bytes' usage.json)
+          pct=$(jq -r '.percent' usage.json)
+          echo "Database: $((db / 1048576)) MB of $((limit / 1048576)) MB ($pct %). Files in transit: $((blobs / 1048576)) MB."
+          if [ "$db" -gt $((limit * 70 / 100)) ]; then
+            echo "::error::The Tally relay's database is at $pct % of the free tier's 500 MB ($((db / 1048576)) MB; files in transit $((blobs / 1048576)) MB). Look at it before it fills: lower the per-family limits, shorten how long files wait, or move to a paid plan."
+            exit 1
+          fi
