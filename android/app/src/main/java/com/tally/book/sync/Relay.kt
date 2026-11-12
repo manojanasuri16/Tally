@@ -67,6 +67,8 @@ data class BoxFor(val member: String, val box: String)
 data class RelayState(
     val epoch: Int, val creator: String?, val rotate: Boolean, val myRole: String,
     val members: List<RelayMember>, val boxes: List<RelayBox>, val invites: List<RelayInvite>, val requests: List<RelayRequest>,
+    /** The family's name as an admin last set it, sealed (Membership.sealMeta); null until someone renames the family. */
+    val meta: String? = null,
 )
 
 interface Relay {
@@ -86,6 +88,8 @@ interface Relay {
     suspend fun joinCancel(familyId: String, inviteId: String, memberId: String, secret: String): RelayResult<Unit>
     suspend fun decide(c: Cred, inviteId: String, allow: Boolean, epoch: Int, box: String?): RelayResult<Unit>
     suspend fun setRole(c: Cred, target: String, admin: Boolean): RelayResult<Unit>
+    /** Stores the family's sealed name (admins only; [epoch] must be the family's newest). */
+    suspend fun setMeta(c: Cred, epoch: Int, meta: String): RelayResult<Unit>
     suspend fun remove(c: Cred, target: String, epoch: Int, boxes: List<BoxFor>): RelayResult<Unit>
     suspend fun rotate(c: Cred, epoch: Int, boxes: List<BoxFor>): RelayResult<Unit>
     suspend fun boxPut(c: Cred, epoch: Int, boxes: List<BoxFor>): RelayResult<Int>
@@ -131,6 +135,7 @@ class HttpRelay(
             requests = list("requests").map { e -> val r = e.asObj() ?: throw BadResponse("state: request")
                 RelayRequest(text(r["invite"], "invite"), text(r["member"], "member"), text(r["blob"], "blob"), long(r["at"], "at"),
                     long(r["expires"], "expires"), text(r["inviteBox"], "inviteBox"), text(r["invitedBy"], "invitedBy")) },
+            meta = o["meta"] as? String,
         )
     }
 
@@ -179,6 +184,9 @@ class HttpRelay(
 
     override suspend fun setRole(c: Cred, target: String, admin: Boolean): RelayResult<Unit> =
         call("tally_member_role", cred(c, "p_target" to target, "p_admin" to admin)) { }
+
+    override suspend fun setMeta(c: Cred, epoch: Int, meta: String): RelayResult<Unit> =
+        call("tally_family_meta_set", cred(c, "p_epoch" to epoch, "p_meta" to meta)) { }
 
     override suspend fun remove(c: Cred, target: String, epoch: Int, boxes: List<BoxFor>): RelayResult<Unit> =
         call("tally_member_remove", cred(c, "p_target" to target, "p_epoch" to epoch, "p_boxes" to boxes(boxes))) { }

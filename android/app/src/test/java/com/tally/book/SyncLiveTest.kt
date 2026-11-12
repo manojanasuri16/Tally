@@ -155,9 +155,14 @@ class SyncLiveTest {
                 "rotate" to relay.rotate(credB, 2, listOf(BoxFor(b.me, "x"))),
                 "decide" to relay.decide(credB, Invite.idOf(Invite.newSecret()), true, 1, "x"),
                 "boxPut" to relay.boxPut(credB, 1, listOf(BoxFor(c.me, "x"))),
+                "setMeta" to relay.setMeta(credB, 1, Membership.sealMeta(Membership.famOf(b.db)!!, "Mine", 9, 0)),
             )
             asMember.forEach { (what, r) -> note("member B $what -> $r"); assertEquals(RelayResult.Err(SyncError.NotAdmin), r) }
             note("pending for member B -> ${relay.pending(fa, b.me, b.db.o("family").o("me").s("notice"))}")
+            val renamed = a.engine.renameFamily("Live test renamed"); note("A renames the family -> $renamed")
+            assertTrue(renamed is SyncResult.Done)
+            note("B sync after rename -> ${b.sync()}; B sees: ${b.view.familyName}")
+            assertEquals("Live test renamed", b.view.familyName)
 
             note("A makes B admin -> ${a.engine.setAdmin(b.me, true)}")
             val creatorRemove = relay.remove(credB, a.me, 2, listOf(BoxFor(b.me, "x"))); note("admin B removes the creator -> $creatorRemove")

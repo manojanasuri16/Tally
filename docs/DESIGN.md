@@ -121,7 +121,7 @@ Sync version 2 (Tally 0.3.0). Families made by 0.1.0/0.2.0 (one shared key insid
 - From the secret: `inviteId` = base64url(HKDF(secret, `"tally-invite-id"`, 16 bytes)) (the only name the relay knows the invite by), `requestKey` = HKDF(secret, `"tally-join-req"`), `grantKey` = HKDF(secret, `"tally-grant"`). The secret itself never reaches the relay: the inviting phone registers the invite as `inviteId` plus an **invite box** (`{ s, by, exp }` sealed under the family's newest key, AAD `"tally-invite:<familyId>:<inviteId>"`), so the family's admins (members) can recover the secret and nobody else can.
 - The family id is 16 random bytes, base64url (22 characters). Names: 1 to 80 characters, no control characters (a longer inviter name is shortened, a blank one left out). `Invite.parse` is strict (exactly the tag `t2`, canonical base64url, a 32-byte secret, a canonical decimal expiry, valid UTF-8 names); the whole text is at most 1024 characters. `Invite.find` picks the link out of a whole shared message.
 - **Old invites** (`tally://join#<familyId>.<key>.<name>[.<inviter>]`, three or four parts, from 0.1.0/0.2.0) are recognised by `Invite.isOld` and refused with "This code is from an older Tally. Ask for a new one."
-- One family name, typed once by whoever starts the family; everyone who joins stores that same name, never the inviter's.
+- One family name, typed by whoever starts the family; everyone who joins stores that same name, never the inviter's. An admin can rename it later ("The family's name" below).
 
 ### Joining (approval)
 
@@ -131,6 +131,12 @@ Sync version 2 (Tally 0.3.0). Families made by 0.1.0/0.2.0 (one shared key insid
 4. **Check (admin's phone).** From `tally_state` it gets the request with the invite's box. It refuses (and turns down at once, so nothing is shared) a request when: the invite box is not sealed under the family's current epoch, does not open, names another maker than the relay says, or its secret does not derive this invite id; the request blob does not open under that invite's `requestKey` for exactly this member id (so a swapped public key or member id fails); the member is already active; this phone has already decided that invite, or any member's record names it (a replay); two requests come for one invite. Otherwise it shows "<name> wants to join <family>. <inviter> invited them. Allow?" (the name from the sealed request, the inviter from the invite box).
 5. **Allow.** The admin's phone seals a **grant** to the joiner's public key: every key the family has (epochs 1..now), the admin's pinned member keys, the creator's id, and a MAC under `grantKey` over all of it (bound to family, member, public key and invite id). `tally_request_decide(allow, epoch, box)` makes the joiner an active member with the credentials it sent, stores the grant as its box for the current epoch, and deletes the request and the invite. The admin's phone also writes the new member's record (name, public key, invite id) so every phone pins the key the admin checked. **Don't allow**: `tally_request_decide(allow = false)` keeps the request as `denied` until it expires; nothing is shared.
 6. **In.** The joining phone polls `tally_join_status` on each sync (`pending` / `denied` / `approved` / `removed`, or gone). On `approved` it fetches its boxes, opens the grant with its private key and checks the MAC with the invite's `grantKey`; a grant that does not check out (a relay that sealed keys of its own to the joiner's public key) is refused and the phone keeps waiting. Then it enters the family as on create (every record marked dirty, every live file queued) and syncs. On `denied` or a request that expired it forgets the request and says so once (`DB.familyGone`).
+
+### The family's name
+
+An admin can rename the family (`SyncEngine.renameFamily(name)`; the same name rules as creating one). The name is a small **meta** blob on the relay, `tally_family.meta`: `{ name, v, at, by }` sealed by the admin's phone with `SyncCrypto.sealE` under the family's newest key, AAD `"tally-meta:<familyId>"`, so the relay never sees the name. It is stored only through `tally_family_meta_set`, which takes the family lock and refuses anyone who is not an admin (`TA006`) and any epoch but the newest (`TA002`, retried after a refresh). A record-level value was not used because any member can push records and the relay cannot read their kind, so "admins only" could not be enforced there.
+
+`tally_state` hands the blob to every active member; each phone opens it with its keyring and takes the name when `v` (one more than the version the renaming phone had seen) is not older than its own `DB.family.nameV`, so an older name replayed by the relay is ignored and an unreadable blob changes nothing. A phone let in after a rename has every key in its grant, so the first state it reads gives it the new name, whatever its invite said; invites made after a rename carry the new name (`newInvite` uses `DB.family.name`). A rename after a removal is sealed under the new key, which the removed member never had. Covered by `SyncRenameTest` and the live check.
 
 ### Membership: admins, removing, leaving
 
@@ -165,16 +171,17 @@ The relay is trusted for availability only, never for confidentiality or for who
 
 ### The relay (Supabase)
 
-`supabase/migrations/20261112013706_tally_membership.sql` (and `20261112020514_tally_not_admin_code.sql`). Row level security is on for every table with no policies and no grants to `anon`/`authenticated`, so the Data API reaches nothing directly. All access is through `security definer` functions in `public` with `search_path = ''`; helpers live in the unexposed `tally_private` schema.
+`supabase/migrations/20261112013706_tally_membership.sql` (and `20261112020514_tally_not_admin_code.sql`, `20261112060000_tally_family_meta.sql`). Row level security is on for every table with no policies and no grants to `anon`/`authenticated`, so the Data API reaches nothing directly. All access is through `security definer` functions in `public` with `search_path = ''`; helpers live in the unexposed `tally_private` schema.
 
-Tables: `tally_family` (id, creator, epoch, rotate, record_count, blob_bytes), `tally_member` (family, id, secret_hash, notice_hash, role, status, has_epoch, joined_at), `tally_invite`, `tally_request`, `tally_box`, `tally_record`, `tally_blob`. The version-1 tables (`tally_families`, `tally_records`, `tally_blobs`, sequence `tally_seq`) are left in place with their rows, unreachable; a later migration can drop them.
+Tables: `tally_family` (id, creator, epoch, rotate, record_count, blob_bytes, meta), `tally_member` (family, id, secret_hash, notice_hash, role, status, has_epoch, joined_at), `tally_invite`, `tally_request`, `tally_box`, `tally_record`, `tally_blob`. The version-1 tables (`tally_families`, `tally_records`, `tally_blobs`, sequence `tally_seq`) are left in place with their rows, unreachable; a later migration can drop them.
 
 Functions (every `p_secret` is checked by hashing it and comparing with the member's `secret_hash`; an unknown family, unknown member, wrong secret or a member who left all give the same `28000`; a removed member gets `TA001`):
 
 | Function | Who | What |
 |---|---|---|
 | `tally_family_create(p_family, p_member, p_secret_hash, p_notice_hash)` | anyone | new family, caller = creator + admin, epoch 1; idempotent for the same creator |
-| `tally_state(p_family, p_member, p_secret, p_after)` | member | epoch, creator, rotate, my role, active members (role, since, has), my boxes after `p_after`, live invites, open requests (admins only) |
+| `tally_state(p_family, p_member, p_secret, p_after)` | member | epoch, creator, rotate, the sealed family name (`meta`, null until renamed), my role, active members (role, since, has), my boxes after `p_after`, live invites, open requests (admins only) |
+| `tally_family_meta_set(…, p_epoch, p_meta)` | admin | stores the sealed family name (at most 4096 characters); `p_epoch` must be the newest |
 | `tally_push(…, p_epoch, p_rows)` / `tally_pull(…, p_since, p_max)` | member | records, as in version 1; push refused unless `p_epoch` is the family's newest |
 | `tally_blob_put(…, p_epoch, p_id, p_data)` / `tally_blob_get(…, p_id)` | member | file blobs, same epoch rule |
 | `tally_invite_create(…, p_invite, p_box)` → expiry ms | member | one-time invite, 24 h |
@@ -218,7 +225,7 @@ A join request needs a live invite id (derived from a secret only the QR has), s
 ### One refresh
 
 0. A leave the relay has not heard of is sent. A waiting join request is checked (`tally_join_status`); once allowed, the grant is checked and the family entered.
-1. `tally_state`: new key boxes are opened (each proved with a key already held) and the keyring grows; the roster, my role and the creator are cached in `DB.family` for the screens. Removed → forget the family, keep the records, say so once.
+1. `tally_state`: new key boxes are opened (each proved with a key already held) and the keyring grows; the roster, my role and the creator are cached in `DB.family` for the screens, and a newer family name is taken. Removed → forget the family, keep the records, say so once.
 2. **Pull** everything with `seq > sync.cursor`; each row is opened with the key of the epoch in its header, then merged exactly as in version 1 (not dirty → take; dirty → last writer by `updatedAt`, then `updatedBy`). Member public keys in pulled records are pinned. The cursor moves in the same save as the page it covers.
 3. **An admin's phone:** rotates if the family is marked `rotate`, gives boxes to members lacking the newest key, and checks open join requests (`SyncEngine.requests`); requests that do not check out are turned down.
 4. **Push** every dirty record that is not private, sealed under the newest epoch, with that epoch (a phone that lacks the newest key pushes nothing).

@@ -15,7 +15,7 @@ import kotlinx.coroutines.withContext
 
 /*
  * The app's sync: one SyncEngine wired to the Supabase relay from BuildConfig, the Ledger, the FileStore and the background
- * check (Notices). Screens call Sync.engine.* (createFamily, requestJoin, newInvite, approve, deny, setAdmin, removeMember,
+ * check (Notices). Screens call Sync.engine.* (createFamily, requestJoin, newInvite, approve, deny, setAdmin, removeMember, renameFamily,
  * leaveFamily, sync...) through Sync.detached, observe Sync.engine.state and Sync.engine.requests, and read Sync.membership().
  */
 object Sync {

@@ -17,7 +17,7 @@ class FakeRelay : Relay {
     class Member(val id: String, var hash: String, var notice: String?, var role: String, var status: String, var has: Int, var joined: Long)
     class InviteRow(val id: String, val by: String, val box: String, var used: Boolean, val expires: Long, val created: Long)
     class Req(val invite: String, val member: String, val hash: String, val notice: String?, val blob: String, var status: String, val at: Long, val expires: Long)
-    class Fam(val id: String, var creator: String?, var epoch: Int = 1, var rotate: Boolean = false) {
+    class Fam(val id: String, var creator: String?, var epoch: Int = 1, var rotate: Boolean = false, var meta: String? = null) {
         val members = LinkedHashMap<String, Member>()
         val invites = LinkedHashMap<String, InviteRow>()
         val requests = LinkedHashMap<String, Req>()
@@ -40,6 +40,8 @@ class FakeRelay : Relay {
     /** A hostile relay: rewrites the requests it shows admins, or the key boxes it hands a member. */
     var tamperRequests: ((List<RelayRequest>) -> List<RelayRequest>)? = null
     var tamperBoxes: ((String, List<RelayBox>) -> List<RelayBox>)? = null
+    /** A hostile relay that hands out this sealed family name instead of the one it holds (an old one replayed). */
+    var replayMeta: String? = null
     /** A hostile relay that ignores "used once" and accepts more requests for the same invite. */
     var ignoreUsed = false
     /** How many file downloads were asked for. */
@@ -112,6 +114,7 @@ class FakeRelay : Relay {
             tamperBoxes?.invoke(me.id, boxes) ?: boxes,
             f.invites.values.filter { !it.used && it.expires > now() }.map { RelayInvite(it.id, it.by, it.expires) },
             tamperRequests?.invoke(reqs) ?: reqs,
+            replayMeta ?: f.meta,
         )
     }
 
@@ -221,6 +224,14 @@ class FakeRelay : Relay {
         Unit
     }
 
+    /** tally_family_meta_set: admins only, the newest epoch, at most 4096 characters. */
+    override suspend fun setMeta(c: Cred, epoch: Int, meta: String) = r("setMeta") {
+        val (f, _) = admin(c)
+        if (epoch != f.epoch) fail(SyncError.Stale)
+        if (meta.isEmpty() || meta.length > 4096) fail(SyncError.BadData("meta"))
+        f.meta = meta
+        Unit
+    }
     override suspend fun setRole(c: Cred, target: String, admin: Boolean) = r("setRole") {
         val (f, me) = admin(c)
         val t = f.members[target]?.takeIf { it.status == "active" } ?: fail(SyncError.Refused)

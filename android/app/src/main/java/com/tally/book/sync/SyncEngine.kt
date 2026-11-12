@@ -211,6 +211,7 @@ class SyncEngine(
         book.edit { db ->
             Membership.enter(db, fam, j.s("name"), grant.creator, me, grant.keys, st.myRole, grant.pins, Clock.millis(), inviteId)
             Membership.applyRoster(db, st)
+            Membership.applyMeta(db, st.meta)          // the family may have been renamed since the invite was made
         }
         return null
     }
@@ -322,6 +323,29 @@ class SyncEngine(
         relay.decide(fam.cred, requestId, false, fam.relayEpoch, null).orStop()
         book.edit { db -> db.o("family")!!.oo("usedInvites")[requestId] = true }
         dropRequest(requestId)
+        refresh()
+    }
+
+    /**
+     * Renames the family (an admin's phone). The name goes to the relay only sealed under the family's newest key, through an
+     * admin-only call; every member's phone takes it on its next sync, and invites made from then on carry it. Refused with
+     * [SyncError.NotAdmin] for a member (here and by the relay); [SyncResult.BadInvite] for a name that is empty, too long or has
+     * control characters (as when creating a family).
+     */
+    suspend fun renameFamily(name: String): SyncResult = exclusive {
+        val nm = Invite.cleanName(name) ?: return@exclusive SyncResult.BadInvite
+        var fam = book.read { Membership.famOf(it) } ?: return@exclusive noFamily()
+        if (!fam.admin) return@exclusive SyncResult.Failed(SyncError.NotAdmin)
+        refreshState(fam)                              // the newest key and the newest name version, before counting on from it
+        fam = book.read { Membership.famOf(it) } ?: return@exclusive noFamily()
+        if (!fam.admin) return@exclusive SyncResult.Failed(SyncError.NotAdmin)
+        val v = book.read { it.o("family").num("nameV").toInt() } + 1
+        retryStale(fam) { f ->
+            if (f.waitingForKey) return@retryStale RelayResult.Err(SyncError.Stale)
+            val blob = withContext(cpu) { Membership.sealMeta(f, nm, v, Clock.millis()) }
+            relay.setMeta(f.cred, f.relayEpoch, blob)
+        }
+        book.edit { db -> db.o("family")?.let { it["name"] = nm; it["nameV"] = v } }
         refresh()
     }
 
@@ -463,6 +487,7 @@ class SyncEngine(
             checkFamily(db, fam)
             if (got.isNotEmpty()) Membership.addKeys(db, got)
             Membership.applyRoster(db, st)
+            Membership.applyMeta(db, st.meta)
         }
         return st
     }

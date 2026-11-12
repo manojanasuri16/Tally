@@ -9,6 +9,7 @@ import java.util.Base64
  *
  * DB.family (version 2):
  *   { v: 2, id, name, creator,                      creator: member id of whoever started it (null once they left)
+ *     nameV,                                         how many times an admin renamed it (the relay's sealed meta; 0 = the name from create or the invite)
  *     me: { secret, notice, pub, priv },             relay credential (hex), notice credential (hex), P-256 key pair (base64url SPKI / PKCS#8)
  *     keys: { "<epoch>": base64(32 bytes) }, relayEpoch,   the keyring, and the family's newest epoch as last seen on the relay
  *     role, roster: [ { id, role, since, has } ], invites: [ { id, by, expires } ],   the relay's view, cached for the screens
@@ -128,6 +129,37 @@ object Membership {
         f["creator"] = st.creator
         f["roster"] = arr().also { a -> st.members.forEach { m -> a.add(obj("id" to m.id, "role" to m.role, "since" to m.since.toDouble(), "has" to m.has)) } }
         f["invites"] = arr().also { a -> st.invites.forEach { i -> a.add(obj("id" to i.id, "by" to i.by, "expires" to i.expiresAt.toDouble())) } }
+    }
+
+    // ---------- the family's name ----------
+
+    fun metaAad(fam: String) = "tally-meta:$fam".toByteArray(Charsets.UTF_8)
+
+    /**
+     * The family's name for the relay, sealed under the newest key: { name, v, at, by }. [v] counts renames, so a phone never goes
+     * back to an older name a relay replays. Only an admin can store it there (`tally_family_meta_set`).
+     */
+    fun sealMeta(fam: Fam, name: String, v: Int, at: Long): String {
+        val json = JsonCodec.stringify(obj("name" to name, "v" to v, "at" to at.toDouble(), "by" to fam.myId))
+        return SyncCrypto.sealE(fam.encKey(fam.relayEpoch)!!, fam.relayEpoch, json.toByteArray(Charsets.UTF_8), metaAad(fam.id))
+    }
+
+    /** The name and its version from the relay's sealed meta, or null when it does not open under a key held here or is not a valid name. */
+    fun openMeta(fam: Fam, blob: String): Pair<String, Int>? {
+        val o = SyncCrypto.openE({ fam.encKey(it) }, blob, metaAad(fam.id))
+            ?.let { runCatching { JsonCodec.parseObj(String(it, Charsets.UTF_8)) }.getOrNull() } ?: return null
+        val name = Invite.cleanName(o.s("name"))?.takeIf { it == o.s("name") } ?: return null
+        val v = o.num("v").toInt()
+        return if (v >= 1) name to v else null
+    }
+
+    /** Takes the family's name from the relay's [blob] when its version is at least the one held here (`DB.family.nameV`). */
+    fun applyMeta(db: Obj, blob: String?) {
+        if (blob.isNullOrEmpty()) return
+        val fam = famOf(db) ?: return
+        val (name, v) = openMeta(fam, blob) ?: return
+        val f = db.o("family") ?: return
+        if (v >= f.num("nameV").toInt()) { f["name"] = name; f["nameV"] = v }
     }
 
     // ---------- key boxes ----------
