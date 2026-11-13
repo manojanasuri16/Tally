@@ -107,10 +107,10 @@ fun loanView(loan: Obj, payments: List<Obj>, today: LocalDate): Obj {
         v["emisPending"] = pending.size.toDouble(); v["amountPending"] = pending.sumOf { it.left }
         v["emiTooLow"] = !closed && balance > 0 && c != null && !c.clears
         v["flatInterestPart"] = c?.flatInterestPart ?: 0.0
-        v["weekday"] = if ((freq == "week" || freq == "fortnight") && start != null) start.dayOfWeek.value.toDouble() else 0.0
+        v["weekday"] = if ((freq == "week" || freq == "fortnight") && start != null) (firstDueOf(loan) ?: start).dayOfWeek.value.toDouble() else 0.0
         v["totalToRepay"] = if (isPersonInstalments(loan)) totalToRepay(loan) else 0.0
         v["extra"] = if (isPersonInstalments(loan)) instalmentExtra(loan) else 0.0
-        v["dueDay"] = if (freq == "month") instalmentBasis(loan).num("dueDay").toInt().let { if (it in 1..31) it else start?.dayOfMonth ?: 0 }.toDouble() else 0.0
+        v["dueDay"] = if (freq == "month") (firstDueOf(loan)?.dayOfMonth?.toDouble() ?: instalmentBasis(loan).num("dueDay")).toInt().let { if (it in 1..31) it else start?.dayOfMonth ?: 0 }.toDouble() else 0.0
     } else {
         v["interestEvery"] = interestEvery(loan)
         v["periodInterest"] = if (closed) 0.0 else c?.periodInterestNow ?: 0.0
@@ -225,6 +225,10 @@ fun validateLoan(draft: Obj): String? {
         val up = parseISO(draft.s("paidUpTo")) ?: return t("loan.err.paidUpTo", "Please enter the date it is paid up to.")
         if (!up.isAfter(start)) return t("loan.err.paidUpTo.early", "The paid-up-to date must be after the entry started.")
         if (up.isAfter(Clock.today())) return t("loan.err.paidUpTo.future", "The paid-up-to date cannot be in the future.")
+    }
+    if (draft.s("firstDue").isNotEmpty()) {
+        val f = parseISO(draft.s("firstDue")) ?: return t("loan.err.firstDue", "Please enter the first payment date.")
+        if (!f.isAfter(start)) return t("loan.err.firstDue.early", "The first payment date must be after the date taken.")
     }
     val m = draft.s("interestMethod")
     if (m.isNotEmpty() && m !in INTEREST_METHODS) return t("loan.err.method", "Please choose how the interest is worked out.")

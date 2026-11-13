@@ -55,6 +55,9 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
     var tenure by remember { mutableStateOf(existing?.let { editText(it.num("tenure")) }.orEmpty()) }
     var dueDay by remember { mutableStateOf(existing?.let { editText(it.num("dueDay")) } ?: today.dayOfMonth.toString()) }
     var dueDayTouched by remember { mutableStateOf(editing) }
+    // The first payment date: shown filled with the usual date (one period after the date taken) until the user picks another.
+    var firstDue by remember { mutableStateOf(existing?.s("firstDue").orEmpty()) }
+    var firstDueTouched by remember { mutableStateOf(existing?.s("firstDue").orEmpty().isNotEmpty()) }
     // A person's entry is paid back one of three ways: interest only (the default: interest every month, the amount itself later, all
     // at once or in parts), no interest (back when they can, in parts or all at once), or fixed instalments (₹1,000 every week for 12 weeks).
     var plan by remember { mutableStateOf(existing?.takeIf { it.s("kind") == "hand" }?.let { personPlanOf(it) } ?: "interest") }
@@ -99,7 +102,9 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
             d["emi"] = emi
             d["tenure"] = n(tenure)
             d["frequency"] = frequency
-            if (LoanFormRules.showDueDay(kind, frequency)) d["dueDay"] = n(dueDay) else d.remove("dueDay")
+            if (LoanFormRules.showDueDay(kind, frequency))
+                d["dueDay"] = if (firstDueTouched) (parseISO(firstDue)?.dayOfMonth?.toDouble() ?: n(dueDay)) else n(dueDay)
+            else d.remove("dueDay")
         } else if (personInstalments) {
             d["plan"] = "instalments"
             d["emi"] = emi
@@ -121,11 +126,13 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
             if (repayBy.isNotEmpty()) d["repayBy"] = repayBy else d.remove("repayBy")
         }
         if (kind == "hand" && !editing) { if (given) d["direction"] = "given" else d.remove("direction") }
+        d.remove("firstDue")
+        if (firstDueTouched && firstDue.isNotEmpty() && defaultFirstDue(d).isNotEmpty()) d["firstDue"] = firstDue
         return d
     }
 
     /** What Paid up to would start as: the latest date that has come due by the form's own schedule. */
-    val suggestion = remember(kind, startDate, frequency, dueDay, tenure, rate, plan, handUnit, every, rateUnit) {
+    val suggestion = remember(kind, startDate, frequency, dueDay, tenure, rate, plan, handUnit, every, rateUnit, firstDue, firstDueTouched) {
         if (editing && existingPaidUpTo.isEmpty()) "" else suggestPaidUpTo(core(), today)
     }
     val paidShown = LoanFormRules.showPaidUpTo(editing, existingPaidUpTo, suggestion)
@@ -189,6 +196,8 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
             DateField(startDate, {
                 startDate = it
                 if (kind == "bank" && !dueDayTouched) parseISO(it)?.let { d -> dueDay = d.dayOfMonth.toString() }
+                // a first payment date on or before the new date taken no longer fits: go back to the usual one
+                if (firstDueTouched) { val f = parseISO(firstDue); val s = parseISO(it); if (f != null && s != null && !f.isAfter(s)) firstDueTouched = false }
             }, words.date)
 
             if (kind == "hand") {
@@ -254,8 +263,6 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
                     else t("loan.emi.help.count", "If you do not know it, leave it empty and give the number of payments."),
                 )
                 TextInput(tenure, { tenure = digitsOnly(it); error = null }, LoanFormRules.tenureLabel(frequency), keyboard = KeyboardType.Number, placeholder = t("loan.tenure.eg", "e.g. 24"))
-                if (EasyForm.showDueDay(easy, kind, frequency, extras))
-                    TextInput(dueDay, { dueDay = digitsOnly(it).take(2); dueDayTouched = true; error = null }, t("loan.dueDay", "Pay on this day of the month"), keyboard = KeyboardType.Number, placeholder = "5")
             } else {
                 if (EasyForm.showEvery(easy, kind, hasInterest, extras)) {
                     FieldTitle(t("loan.every", "Interest is paid"))
@@ -266,6 +273,12 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
                     DateField(repayBy, { repayBy = it; error = null }, t("loan.repayBy.renew", "Repay or renew by"), clearable = true)
                     Hint(t("loan.repayBy.gold.hint", "Gold loans usually must be repaid or renewed within 12 months."))
                 }
+            }
+            // Payments are often due on another day than the one the money came: every entry with a schedule asks for the first one.
+            val usualFirst = defaultFirstDue(core())
+            if (usualFirst.isNotEmpty()) {
+                DateField(if (firstDueTouched) firstDue else usualFirst, { firstDue = it; firstDueTouched = true; error = null }, t("loan.firstDue", "First payment date"))
+                Hint(t("loan.firstDue.help", "The rest follow from this date."))
             }
             if (EasyForm.showPaidUpToField(easy, paidShown, extras)) {
                 DateField(paidValue, { paidUpTo = it; paidTouched = true; error = null }, t("loan.paidUpTo", "Paid up to"), clearable = true)

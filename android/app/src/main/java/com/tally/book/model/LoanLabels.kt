@@ -91,7 +91,7 @@ fun instalmentDayInWords(loan: Obj): String {
     val f = frequencyOf(loan)
     val start = parseISO(loan.s("startDate"))
     if (start == null || (f != "week" && f != "fortnight")) return frequencyLabel(f)
-    val day = weekdayNameL(start)
+    val day = weekdayNameL(firstDueOf(loan) ?: start)
     return if (f == "week") t("loan.everyWeekday", "Every {day}", "day" to day) else t("loan.everyOtherWeekday", "Every other {day}", "day" to day)
 }
 

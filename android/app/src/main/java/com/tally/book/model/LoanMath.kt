@@ -182,14 +182,44 @@ internal fun slotLimit(today: LocalDate): LocalDate {
 // ---- instalment loans ----
 
 /** The due date of instalment [k] (1 = the first). */
-internal class Schedule(private val start: LocalDate, private val frequency: String, dueDay: Int) {
-    private val day = if (dueDay in 1..31) dueDay else start.dayOfMonth
-    private val firstKey: String = monthKey(start).let { sk -> if (clampDay(sk, day).isAfter(start)) sk else addMonths(sk, 1) }
+internal class Schedule(private val start: LocalDate, private val frequency: String, dueDay: Int, private val first: LocalDate? = null) {
+    /* with a first payment date ([first], see firstDueOf) every due counts from it: monthly on its day, weekly on its weekday */
+    private val day = first?.dayOfMonth ?: if (dueDay in 1..31) dueDay else start.dayOfMonth
+    private val firstKey: String = if (first != null) monthKey(first) else monthKey(start).let { sk -> if (clampDay(sk, day).isAfter(start)) sk else addMonths(sk, 1) }
     fun due(k: Int): LocalDate = when (frequency) {
-        "fortnight" -> start.plusDays(14L * k)
-        "week" -> start.plusDays(7L * k)
-        "day" -> start.plusDays(k.toLong())
+        "fortnight" -> first?.plusDays(14L * (k - 1)) ?: start.plusDays(14L * k)
+        "week" -> first?.plusDays(7L * (k - 1)) ?: start.plusDays(7L * k)
+        "day" -> first?.plusDays((k - 1).toLong()) ?: start.plusDays(k.toLong())
         else -> clampDay(addMonths(firstKey, k - 1), day)
+    }
+}
+
+/**
+ * The first payment date the user gave (`firstDue`), when it is after the start; null means the usual: one period after the
+ * date taken. Payments are often due on another day than the one the money came, so the schedule can start from this date.
+ */
+fun firstDueOf(loan: Obj): LocalDate? {
+    val f = parseISO(loan.s("firstDue")) ?: return null
+    val s = parseISO(loan.s("startDate"))
+    return if (s == null || f.isAfter(s)) f else null
+}
+
+/** The k-th (from 1) interest date of an interest-only loan: every 1, 3, 6 or 12 months from the first payment date, or from the start. */
+internal fun interestDue(loan: Obj, start: LocalDate, k: Int): LocalDate {
+    val step = everyMonths(interestEvery(loan))
+    val f = firstDueOf(loan)
+    return if (f != null) clampDay(addMonths(monthKey(f), (k - 1) * step), f.dayOfMonth)
+    else clampDay(addMonths(monthKey(start), k * step), start.dayOfMonth)
+}
+
+/** The first payment date the form shows before the user picks one: what the schedule gives without `firstDue`; "" when nothing falls due. */
+fun defaultFirstDue(draft: Obj): String {
+    val d = draft.copyObj(); d.remove("firstDue")
+    val start = parseISO(d.s("startDate")) ?: return ""
+    return when {
+        isInstalments(d) -> Schedule(start, frequencyOf(d), if (isPersonInstalments(d)) 0 else d.num("dueDay").toInt()).due(1).toString()
+        d.s("kind") in setOf("hand", "gold") && d.num("rate") > 0 -> interestDue(d, start, 1).toString()
+        else -> ""
     }
 }
 
@@ -224,7 +254,7 @@ internal fun calcInstalments(loan: Obj, pays: List<Obj>, start: LocalDate, today
         for (p in pays) { val a = p.num("amount"); pt += a; if (p.s("kind") == "interest") pi += a else { val x = min(bal, a); bal -= x; pp += x } }
         return LoanCalc(if (bal < 0.005) 0.0 else bal, pt, pp, pi, emptyList(), false, rateNow = baseRate, count = n, clears = false)
     }
-    val sched = Schedule(start, freq, loan.num("dueDay").toInt())
+    val sched = Schedule(start, freq, loan.num("dueDay").toInt(), firstDueOf(loan))
     fun rAt(d: LocalDate) = if (flat) 0.0 else rateOn(loan, d) / 100 / ppy
     fun emiAt(d: LocalDate) = if (flat) emi0 else emiOn(emi0, changes, d)
     val lastChange = changes.lastOrNull()?.let { parseISO(it.s("from")) }
@@ -320,14 +350,12 @@ internal fun calcInterestOnly(loan: Obj, pays: List<Obj>, start: LocalDate, toda
     if (noInterest) return LoanCalc(bal, paidTotal, paidPrincipal, paidInterest, emptyList(), false)
 
     fun owedOn(d: LocalDate): Double = max(0.0, p0 - returns.filter { it.first == null || !it.first!!.isAfter(d) }.sumOf { it.second })
-    val step = everyMonths(interestEvery(loan))
-    val sk = monthKey(start)
     val limit = slotLimit(today)
     val slots = ArrayList<Slot>()
     var t = paidInterest
     var prev = start; var k = 1; var prePaid = 0
     while (k < 5000) {
-        val due = clampDay(addMonths(sk, k * step), start.dayOfMonth)
+        val due = interestDue(loan, start, k)
         /* only whole periods that ended while money was still owed */
         if (repaidOn != null && due.isAfter(repaidOn)) break
         if (upTo != null && !due.isAfter(upTo)) { prePaid++; prev = due; k++; continue }
@@ -351,14 +379,13 @@ fun suggestPaidUpTo(draft: Obj, today: LocalDate = Clock.today()): String {
     val start = parseISO(draft.s("startDate")) ?: return ""
     var last: LocalDate? = null
     if (isInstalments(draft)) {
-        val sched = Schedule(start, frequencyOf(draft), if (isPersonInstalments(draft)) 0 else draft.num("dueDay").toInt())
+        val sched = Schedule(start, frequencyOf(draft), if (isPersonInstalments(draft)) 0 else draft.num("dueDay").toInt(), firstDueOf(draft))
         val n = tenureOf(draft)
         var k = 1
         while (k < 100000 && (n <= 0 || k <= n)) { val d = sched.due(k); if (!d.isBefore(today)) break; last = d; k++ }
     } else if (draft.s("kind") in setOf("hand", "gold") && draft.num("rate") > 0) {
-        val step = everyMonths(interestEvery(draft))
         var k = 1
-        while (k < 5000) { val d = clampDay(addMonths(monthKey(start), k * step), start.dayOfMonth); if (!d.isBefore(today)) break; last = d; k++ }
+        while (k < 5000) { val d = interestDue(draft, start, k); if (!d.isBefore(today)) break; last = d; k++ }
     }
     return last?.toString() ?: ""
 }
