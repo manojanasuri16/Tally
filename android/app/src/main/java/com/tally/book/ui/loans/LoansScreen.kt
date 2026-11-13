@@ -326,18 +326,29 @@ private fun PrivateGroup(p: PrivateLoans, owed: Map<String, Double>) {
         if (p.hasTaken) "${t("home.toPay", "To pay")} ${amtText(p.toPay)}" else null,
         if (p.hasGiven) "${loanWords(true).toReturn} ${amtText(p.toComeBack)}" else null,
     ).joinToString(" · ")
-    AGroup(
-        title = t("home.private", "Only on this phone"), footer = t("home.private.foot", "Your family doesn't see these."),
-        // Easy mode drops the totals in the header (the figure above already says it)
-        trailingHead = if (LocalEasy.current) null else ({ Text(total, style = Apple.type.subheadline, maxLines = 1) }),
-    ) {
-        p.loans.forEach { l ->
-            item {
-                ARow(
-                    loanTitle(l), sub = listOf(loanKindLabel(l), loanSecond(l)).filter { it.isNotBlank() }.joinToString(" · "),
-                    money = owed[l.s("id")] ?: 0.0, moneyColor = Apple.colors.label, chevron = true, onClick = { openLoan(l.s("id")) },
-                    trailing = { PrivateMark() },
-                )
+    // a section heading with the lock and the totals, then the private entries in the same kind groups as the shared ones
+    Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 18.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.Lock, null, Modifier.size(18.dp), tint = Apple.colors.secondaryLabel)
+            Spacer(Modifier.width(8.dp))
+            Text(t("home.private", "Only on this phone"), Modifier.weight(1f), style = Apple.type.title3.copy(fontWeight = FontWeight.SemiBold), color = Apple.colors.label)
+        }
+        // Easy mode drops the totals (the figure above already says it)
+        if (!LocalEasy.current) Text(total, style = Apple.type.subheadline, color = Apple.colors.secondaryLabel)
+        Text(t("home.private.foot", "Your family doesn't see these."), style = Apple.type.footnote, color = Apple.colors.secondaryLabel)
+    }
+    val taken = p.loans.filter { !isGiven(it) }
+    val kinds = LOAN_KINDS + taken.map { it.s("kind") }.filter { it !in LOAN_KINDS }.distinct()
+    val groups = kinds.map { k -> kindLabel(k) to taken.filter { it.s("kind") == k } } + (t("home.gave", "Money I gave") to p.loans.filter { isGiven(it) })
+    groups.filter { it.second.isNotEmpty() }.forEach { (title, list) ->
+        AGroup(title = title) {
+            list.forEach { l ->
+                item {
+                    ARow(
+                        loanTitle(l), sub = loanSecond(l).ifBlank { null },
+                        money = owed[l.s("id")] ?: 0.0, moneyColor = Apple.colors.label, chevron = true, onClick = { openLoan(l.s("id")) },
+                    )
+                }
             }
         }
     }
