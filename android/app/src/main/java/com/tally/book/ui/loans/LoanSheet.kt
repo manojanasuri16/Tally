@@ -72,6 +72,15 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
     var grams by remember { mutableStateOf(existing?.let { editText(it.num("grams")) }.orEmpty()) }
     var note by remember { mutableStateOf(existing?.s("note").orEmpty()) }
     var keepPrivate by remember { mutableStateOf(existing?.b("private") ?: false) }
+    // Whose entry it is: one person often keeps the book for the family. The choice shows when the family has someone else
+    // (or the entry already belongs to someone else); a new entry is mine.
+    var owner by remember { mutableStateOf(existing?.let { ownerOf(it) } ?: myId()) }
+    val people = remember {
+        val m = com.tally.book.sync.Sync.membership(DB).members.map { it.id to it.name.ifBlank { memberName(it.id) } }
+        val all = if (m.none { it.first == owner }) m + (owner to memberName(owner)) else m
+        all.map { (id, name) -> id to if (id == myId()) t("loan.owner.me", "Me") else name }
+            .sortedBy { if (it.first == myId()) "" else it.second.lowercase() }
+    }
     val pending = remember { mutableStateListOf<Picked>() }
     val removed = remember { mutableStateListOf<String>() }
     var error by remember { mutableStateOf<String?>(null) }
@@ -98,6 +107,7 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
         if (hasInterest && kind == "bank") d["interestMethod"] = method else d.remove("interestMethod")
         d["note"] = note.trim()
         d["private"] = keepPrivate
+        if (people.size > 1) d["owner"] = owner
         if (kind == "bank") {
             d["emi"] = emi
             d["tenure"] = n(tenure)
@@ -171,6 +181,10 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
             }
         }
         if (kind.isNotEmpty()) {
+            if (people.size > 1) {
+                FieldTitle(t("loan.owner", "Whose entry is it?"))
+                ChoiceChips(people, owner, { owner = it; error = null })
+            }
             if (LoanFormRules.showPledge(kind)) {
                 FieldTitle(t("loan.pledge", "What is pledged?"))
                 ChoiceChips(PLEDGES.map { it to pledgeLabel(it) }, pledge, { pledge = it; error = null })

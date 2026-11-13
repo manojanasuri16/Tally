@@ -110,13 +110,20 @@ fun WelcomeScreen() {
 private class Home(
     val totals: Obj, val due: List<Obj>, val expected: List<Obj>, val groups: List<Pair<String, List<Obj>>>, val given: List<Obj>,
     val closed: List<Obj>, val hasGiven: Boolean, val priv: PrivateLoans, val any: Boolean, val owed: Map<String, Double>, val hasTaken: Boolean, val showAdder: Boolean,
+    /** Everyone / Mine is offered (some entry is someone else's); [mineOnly] is the view in force; [trash] is Recently deleted. */
+    val canFilter: Boolean, val mineOnly: Boolean, val trash: List<Obj>,
 )
+
+/** The home view this phone last chose: "mine" or everyone (kept on the phone only). */
+private const val VIEW_KEY = "home.view"
 
 /** A pending Pay / Received tap: the loan and what the row was for ("principal" starts the form as a part repayment). */
 private class PayFor(val loanId: String, val kind: String?)
 
-private fun readHome(): Home {
-    val all = loans()
+private fun readHome(mineChosen: Boolean): Home {
+    val canFilter = hasOthersEntries()
+    val mineOnly = canFilter && mineChosen
+    val all = loans().filter { !mineOnly || isMine(it) }
     val open = all.filter { !it.b("closed") }
     val owed = all.associate { it.s("id") to loanView(it).num("owed") }
     val (shared, priv) = splitPrivate(open, owed)
@@ -126,18 +133,24 @@ private fun readHome(): Home {
     val given = open.filter { isGiven(it) }.sortedBy { loanTitle(it).lowercase() }
     val givenShared = shared.filter { isGiven(it) }.sortedBy { loanTitle(it).lowercase() }
     val closed = all.filter { it.b("closed") }.sortedByDescending { it.s("closedDate") }
-    val rows = dueList()
-    return Home(totals(), rows.filter { !it.b("given") }, rows.filter { it.b("given") }, groups, givenShared, closed, open.any { isGiven(it) }, priv, all.isNotEmpty(), owed, taken.isNotEmpty(), bookHasOthers())
+    val only: (Obj) -> Boolean = { !mineOnly || isMine(it) }
+    val rows = dueList(only = only)
+    return Home(totals(only = only), rows.filter { !it.b("given") }, rows.filter { it.b("given") }, groups, givenShared, closed, open.any { isGiven(it) }, priv,
+        all.isNotEmpty() || mineOnly, owed, taken.isNotEmpty(), bookHasOthers(), canFilter, mineOnly, trashedLoans())
 }
 
 @Composable
 fun LoansScreen() {
     val rev = rememberLedger()
-    val home = remember(rev) { readHome() }
+    var mineChosen by remember { mutableStateOf(DevicePrefs.get(VIEW_KEY) == "mine") }
+    val home = remember(rev, mineChosen) { readHome(mineChosen) }
+    // entries in Recently deleted for 30 days go for good, on a phone allowed to delete them (the others leave them to it)
+    LaunchedEffect(rev) { purgeExpiredTrash() }
     var payFor by remember { mutableStateOf<PayFor?>(null) }
     var adding by remember { mutableStateOf(false) }
     val offerReminders = com.tally.book.ui.family.rememberReminderOffer()
     var closedOpen by rememberSaveable { mutableStateOf(false) }
+    var trashOpen by rememberSaveable { mutableStateOf(false) }
 
     val pull = rememberPullRefresh {
         val hook = syncHook
@@ -165,14 +178,23 @@ fun LoansScreen() {
                         syncStatusLine?.let { line -> Box(Modifier.padding(start = 4.dp)) { line() } }
                         backupLine?.invoke()
                     } else {
+                        if (home.canFilter) SegmentedControl(
+                            listOf("all" to t("home.view.all", "Everyone"), "mine" to t("home.view.mine", "Mine")),
+                            if (home.mineOnly) "mine" else "all",
+                            { v -> mineChosen = v == "mine"; DevicePrefs.set(VIEW_KEY, if (mineChosen) "mine" else null) },
+                        )
                         HomeHero(home)
-                        if (home.hasTaken) DueSection(home.due, onPay = { id, k -> payFor = PayFor(id, k) }, onOpen = { openLoan(it) })
-                        if (home.hasGiven && home.expected.isNotEmpty()) DueSection(home.expected, onPay = { id, k -> payFor = PayFor(id, k) }, onOpen = { openLoan(it) }, given = true)
+                        // in Everyone, each row says whose it is; in Mine they are all mine
+                        val showOwner = home.canFilter && !home.mineOnly
+                        if (home.hasTaken || home.mineOnly) DueSection(home.due, onPay = { id, k -> payFor = PayFor(id, k) }, onOpen = { openLoan(it) }, showOwner = showOwner)
+                        if (home.hasGiven && home.expected.isNotEmpty()) DueSection(home.expected, onPay = { id, k -> payFor = PayFor(id, k) }, onOpen = { openLoan(it) }, given = true, showOwner = showOwner)
                         // Easy mode leaves out "added by" under each name: one line per loan
-                        home.groups.forEach { (kind, list) -> LoanGroup(kindLabel(kind), list, home.owed, home.showAdder && !easy) }
-                        if (home.given.isNotEmpty()) LoanGroup(t("home.gave", "Money I gave"), home.given, home.owed, home.showAdder && !easy)
+                        val sub = when { showOwner -> RowSub.OWNER; home.showAdder && !easy && !home.canFilter -> RowSub.ADDER; else -> RowSub.NONE }
+                        home.groups.forEach { (kind, list) -> LoanGroup(kindLabel(kind), list, home.owed, sub) }
+                        if (home.given.isNotEmpty()) LoanGroup(t("home.gave", "Money I gave"), home.given, home.owed, sub)
                         if (home.priv.loans.isNotEmpty()) PrivateGroup(home.priv, home.owed)
                         if (home.closed.isNotEmpty()) ClosedGroup(home.closed, closedOpen) { closedOpen = !closedOpen }
+                        if (home.trash.isNotEmpty()) TrashGroup(home.trash, trashOpen) { trashOpen = !trashOpen }
                     }
                     PrimaryButton(t("home.addLoan", "Add an entry"), { adding = true }, Modifier.fillMaxWidth().padding(top = 4.dp))
                 }
@@ -209,12 +231,16 @@ private fun HomeHero(home: Home) {
 }
 
 @Composable
-private fun DueSection(due: List<Obj>, onPay: (String, String?) -> Unit, onOpen: (String) -> Unit, given: Boolean = false) {
+private fun DueSection(due: List<Obj>, onPay: (String, String?) -> Unit, onOpen: (String) -> Unit, given: Boolean = false, showOwner: Boolean = false) {
     val w = loanWords(given)
     // the month's total beside the heading: everything listed, pending amounts included (each row's figure already includes them)
     val total = due.sumOf { it.num("amount") }
+    // in Everyone, when some rows are someone else's, a line under the group gives my own part of the month
+    val mineRows = due.filter { isMine(it.o("loan")!!) }
+    val yours = if (showOwner && mineRows.size < due.size) mineRows.sumOf { it.num("amount") } else null
     AGroup(
         title = w.expected,
+        footer = yours?.let { t("home.yours", "Yours: {amt} of {all}", "amt" to amtText(it), "all" to amtText(total)) },
         trailingHead = if (due.isEmpty()) null else ({ Money(total, style = Apple.type.subheadline, fontWeight = FontWeight.SemiBold, color = Apple.colors.label) }),
     ) {
         if (due.isEmpty()) item { NoteRow(if (given) t("home.nothingExpected", "Nothing expected this month") else t("home.nothingDue", "Nothing due this month")) }
@@ -224,6 +250,7 @@ private fun DueSection(due: List<Obj>, onPay: (String, String?) -> Unit, onOpen:
             item {
                 DueRow(
                     loan, d.s("date"), d.num("amount"), d.b("overdue"), if (principal) w.toReturn else null, given,
+                    owner = if (showOwner) memberName(ownerOf(loan)) else null,
                     note = dueRowNote(loan, d.num("pending"), d.num("count").toInt(), amtText(d.num("pending"))),
                     onPay = { onPay(loan.s("id"), if (principal) "principal" else null) }, onOpen = { onOpen(loan.s("id")) },
                 )
@@ -234,7 +261,7 @@ private fun DueSection(due: List<Obj>, onPay: (String, String?) -> Unit, onOpen:
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun DueRow(loan: Obj, date: String, amount: Double, overdue: Boolean, tag: String?, given: Boolean, note: String?, onPay: () -> Unit, onOpen: () -> Unit) {
+private fun DueRow(loan: Obj, date: String, amount: Double, overdue: Boolean, tag: String?, given: Boolean, owner: String? = null, note: String?, onPay: () -> Unit, onOpen: () -> Unit) {
     val s = LocalSemantic.current
     val easy = LocalEasy.current
     val stacked = bigText()
@@ -242,7 +269,8 @@ private fun DueRow(loan: Obj, date: String, amount: Double, overdue: Boolean, ta
     val details: @Composable (Modifier) -> Unit = { m ->
         Column(m.pressable(onClick = onOpen).padding(vertical = 4.dp)) {
             Text(loanTitle(loan), style = Apple.type.body.copy(fontWeight = FontWeight.SemiBold), color = Apple.colors.label)
-            loanSecond(loan).takeIf { it.isNotEmpty() }?.let { Text(it, style = Apple.type.subheadline, color = Apple.colors.secondaryLabel) }
+            listOf(loanSecond(loan), owner.orEmpty()).filter { it.isNotEmpty() }.joinToString(" · ").takeIf { it.isNotEmpty() }
+                ?.let { Text(it, style = Apple.type.subheadline, color = Apple.colors.secondaryLabel) }
             // an overdue payment is a pill and a red date; the date wraps under the pill when there is no room beside it
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.Center) {
                 if (overdue) Pill(t("home.overdue", "Overdue"), s.negative, Modifier.align(Alignment.CenterVertically))
@@ -269,13 +297,20 @@ private fun DueRow(loan: Obj, date: String, amount: Double, overdue: Boolean, ta
     }
 }
 
+/** What a loan row says under its title besides its second line: nothing, who added it, or whose it is. */
+private enum class RowSub { NONE, ADDER, OWNER }
+
 @Composable
-private fun LoanGroup(title: String, list: List<Obj>, owed: Map<String, Double>, showAdder: Boolean) {
+private fun LoanGroup(title: String, list: List<Obj>, owed: Map<String, Double>, sub: RowSub) {
     AGroup(title = title) {
         list.forEach { l ->
             item {
                 ARow(
-                    loanTitle(l), sub = loanRowSub(loanSecond(l), if (showAdder) memberName(l.s("by")) else null), money = owed[l.s("id")] ?: 0.0, moneyColor = Apple.colors.label,
+                    loanTitle(l), sub = when (sub) {
+                        RowSub.ADDER -> loanRowSub(loanSecond(l), memberName(l.s("by")))
+                        RowSub.OWNER -> listOf(loanSecond(l), memberName(ownerOf(l))).filter { it.isNotBlank() }.joinToString(" · ")
+                        RowSub.NONE -> loanSecond(l).ifBlank { null }
+                    }, money = owed[l.s("id")] ?: 0.0, moneyColor = Apple.colors.label,
                     chevron = true, onClick = { openLoan(l.s("id")) },
                     trailing = if (l.b("private")) ({ PrivateMark() }) else null,
                 )
@@ -387,4 +422,56 @@ fun ShareIntake() {
     }
     val id = loanId
     if (shared != null && id != null) PaymentSheet(id, null, sms = shared, onDismiss = { text = null; loanId = null })
+}
+
+/**
+ * Recently deleted: entries deleted in the last 30 days, folded like Closed entries. Each says who deleted it and how many days
+ * are left, with Restore, which anyone in the family may use (it comes back on every phone).
+ */
+@Composable
+private fun TrashGroup(list: List<Obj>, open: Boolean, toggle: () -> Unit) {
+    val calm = reduceMotion()
+    val angle by animateFloatAsState(if (open) 90f else 0f, if (calm) Motion.fade() else Motion.control(), label = "trash")
+    AGroup {
+        item {
+            ARow(
+                t("home.trash", "Recently deleted"), value = list.size.toString(), onClick = toggle,
+                trailing = { Icon(Icons.AutoMirrored.Rounded.ArrowForwardIos, null, Modifier.size(14.dp).rotate(angle), tint = Apple.colors.tertiaryLabel) },
+            )
+        }
+    }
+    AnimatedVisibility(
+        open,
+        enter = if (calm) fadeIn(Motion.fade()) else expandVertically(Motion.standard()) + fadeIn(Motion.standard()),
+        exit = if (calm) fadeOut(Motion.fade()) else shrinkVertically(Motion.standard()) + fadeOut(Motion.standard()),
+    ) {
+        Column {
+            AGroup(footer = t("home.trash.foot", "Deleted entries stay here for 30 days. Anyone in the family can bring one back.")) {
+                list.forEach { l ->
+                    item {
+                        ARow(
+                            loanTitle(l),
+                            sub = t("home.trash.row", "Deleted by {name} · {days}", "name" to memberName(l.s("trashedBy")),
+                                "days" to tp("home.trash.days", trashDaysLeft(l), "{n} day left", "{n} days left")),
+                            trailing = {
+                                PlainButton(t("home.trash.restore", "Restore"), {
+                                    Ledger.edit { restoreLoan(l.s("id")) }
+                                    Dialogs.snack(t("home.trash.restored", "Entry brought back"))
+                                }, bold = true)
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Deletes for good the entries whose 30 days in Recently deleted are up, where this phone may delete them. */
+internal fun purgeExpiredTrash() {
+    val due = expiredTrash { com.tally.book.sync.SyncModel.mayDeleteHere(DB, "loan", it) }
+    if (due.isEmpty()) return
+    val fileIds = due.flatMap { filesOfLoanAll(it.s("id")) }
+    Ledger.edit { due.forEach { deleteLoan(it.s("id")) }; fileIds.forEach { DB.oo("sync").oo("blobsUp").remove(it) } }
+    dropBytesNow(fileIds)
 }

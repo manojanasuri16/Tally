@@ -92,16 +92,15 @@ private fun LoanBody(id: String, d: Detail) {
         scope.launch {
             val rec = DB.objs("loans").firstOrNull { it.s("id") == id }
             if (rec != null && !com.tally.book.sync.SyncModel.mayDeleteHere(DB, "loan", rec)) { Dialogs.tell(notYoursToDelete(rec)); return@launch }
+            // a delete goes to Recently deleted first: anyone in the family can bring it back for 30 days
             val ok = Dialogs.ask(
-                t("loan.delete.ask", "Delete this entry?\n\nIts payments and documents are deleted too. This cannot be undone."),
+                t("loan.trash.ask", "Delete this entry?\n\nIt stays in Recently deleted for 30 days, where anyone in the family can bring it back."),
                 t("dlg.delete", "Delete"), danger = true,
             )
             if (!ok) return@launch
-            val payIds = d.payments.map { it.s("id") }.toSet()
-            val fileIds = filesAll().filter { (it.s("ownerType") == "loan" && it.s("ownerId") == id) || (it.s("ownerType") == "payment" && it.s("ownerId") in payIds) }.map { it.s("id") }
-            Ledger.edit { deleteLoan(id); fileIds.forEach { DB.oo("sync").oo("blobsUp").remove(it) } }
-            dropBytesNow(fileIds)
+            Ledger.edit { trashLoan(id) }
             AppNav.back()
+            Dialogs.snack(t("loan.trash.snack", "Entry deleted"), t("dlg.undo", "Undo")) { Ledger.edit { restoreLoan(id) } }
         }
     }
 
@@ -268,6 +267,7 @@ private fun Facts(loan: Obj, v: Obj) {
             }
         }
         item { ARow(if (isGiven(loan)) t("loan.given", "Given on") else t("loan.taken", "Taken on"), value = fmtISODate(loan.s("startDate")).ifEmpty { "—" }) }
+        if (bookHasOthers()) item { ARow(t("loan.owner.row", "Whose entry"), value = memberName(ownerOf(loan))) }
         if (v.s("paidUpTo").isNotEmpty()) item { ARow(t("loan.paidUpTo.row", "Paid up to"), value = fmtISODate(v.s("paidUpTo"))) }
         if (loan.b("private")) item {
             ARow(t("loan.private", "Private"), sub = t("loan.keepPrivate.help", "Only on this phone. Not shared with family."), trailing = { PrivateMark() })

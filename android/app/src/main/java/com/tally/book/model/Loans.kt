@@ -146,8 +146,8 @@ fun loanView(loan: Obj, payments: List<Obj>, today: LocalDate): Obj {
  * month or earlier, the whole amount still owed, kind "principal", dated repayBy, overdue once that date has passed (pending 0,
  * count 1). A no-interest loan gives only the second. [given] marks money I gave (rows to receive, not to pay).
  */
-fun dueList(today: LocalDate = Clock.today(), sharedOnly: Boolean = false): List<Obj> =
-    loans().filter { !it.b("closed") && !(sharedOnly && it.b("private")) }.flatMap { l ->
+fun dueList(today: LocalDate = Clock.today(), sharedOnly: Boolean = false, only: (Obj) -> Boolean = { true }): List<Obj> =
+    loans().filter { !it.b("closed") && !(sharedOnly && it.b("private")) && only(it) }.flatMap { l ->
         val v = loanView(l, today)
         val given = isGiven(l)
         val rows = ArrayList<Obj>(2)
@@ -169,10 +169,11 @@ fun dueList(today: LocalDate = Clock.today(), sharedOnly: Boolean = false): List
  * Money never nets out: owed, dueThisMonth, paidThisMonth and byKind are about money I took only; toReceive (what is still to come
  * back on open loans I gave), expectedThisMonth and receivedThisMonth are the given side. dueThisMonth / expectedThisMonth are the
  * sums of the due list's amounts (so they include what is pending); pendingThisMonth / pendingToReceive are the pending parts.
- * count is every open loan, givenCount the given ones among them. [sharedOnly] leaves private loans out.
+ * count is every open loan, givenCount the given ones among them. [sharedOnly] leaves private loans out; [only] keeps just the
+ * loans it accepts (the home screen's Mine: `::isMine`).
  */
-fun totals(today: LocalDate = Clock.today(), sharedOnly: Boolean = false): Obj {
-    val all = loans().filter { !(sharedOnly && it.b("private")) }
+fun totals(today: LocalDate = Clock.today(), sharedOnly: Boolean = false, only: (Obj) -> Boolean = { true }): Obj {
+    val all = loans().filter { !(sharedOnly && it.b("private")) && only(it) }
     val open = all.filter { !it.b("closed") }
     val by = obj("bank" to 0.0, "hand" to 0.0, "gold" to 0.0)
     var owed = 0.0; var toReceive = 0.0; var givenCount = 0
@@ -180,7 +181,7 @@ fun totals(today: LocalDate = Clock.today(), sharedOnly: Boolean = false): Obj {
         val o = loanView(it, today).num("owed")
         if (isGiven(it)) { toReceive += o; givenCount++ } else { owed += o; by[it.s("kind")] = by.num(it.s("kind")) + o }
     }
-    val rows = dueList(today, sharedOnly)
+    val rows = dueList(today, sharedOnly, only)
     val taken = rows.filter { !it.b("given") }; val given = rows.filter { it.b("given") }
     val key = monthKey(today)
     val givenIds = all.filter { isGiven(it) }.map { it.s("id") }.toSet()

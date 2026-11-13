@@ -86,7 +86,8 @@ fun stampNew(rec: Obj) {
 
 private fun live(key: String): List<Obj> = DB.objs(key).filter { !it.b("deleted") }
 
-fun loans(): List<Obj> = live("loans")
+/** The open book: every live loan except those in Recently deleted. */
+fun loans(): List<Obj> = live("loans").filter { !isTrashed(it) }
 fun loan(id: String?): Obj? = if (id.isNullOrEmpty()) null else loans().firstOrNull { it.s("id") == id }
 
 /** Newest first: by date, then by when it was entered. */
@@ -149,6 +150,58 @@ fun saveLoan(draft: Obj): Obj {
     replaceById(DB.aa("loans"), rec)
     if (old != null && !old.b("deleted") && old.b("private") != rec.b("private")) touchFamilyOf(rec.s("id"))
     return rec
+}
+
+// ---- whose entry ----
+
+/**
+ * The family member an entry belongs to. Someone often keeps the book for the whole family (a parent's loans added from a
+ * child's phone), so who added an entry (`by`) is not whose it is: `owner` says that, and without it the adder is the owner.
+ */
+fun ownerOf(loan: Obj): String = loan.s("owner").ifEmpty { loan.s("by") }.ifEmpty { myId() }
+fun isMine(loan: Obj): Boolean = ownerOf(loan) == myId()
+
+/** Whether the home screen offers Everyone / Mine: some entry in the book belongs to someone else. */
+fun hasOthersEntries(): Boolean = loans().any { !isMine(it) }
+
+// ---- recently deleted ----
+
+/**
+ * Deleting an entry first moves it to Recently deleted: `trashed` (millis) and `trashedBy` are set and synced like any edit,
+ * so every phone hides it and anyone in the family can bring it back. After [TRASH_DAYS] days a phone allowed to delete it
+ * (its maker, the maker of the loan or an admin) deletes it for good with deleteLoan. Its payments and files are untouched until then.
+ */
+const val TRASH_DAYS = 30
+private const val DAY_MS = 86_400_000.0
+
+fun isTrashed(loan: Obj): Boolean = loan.num("trashed") > 0
+
+/** The entries in Recently deleted, most recently deleted first. */
+fun trashedLoans(): List<Obj> = live("loans").filter { isTrashed(it) }.sortedByDescending { it.num("trashed") }
+
+fun trashLoan(id: String) {
+    val l = live("loans").firstOrNull { it.s("id") == id && !isTrashed(it) } ?: return
+    l["trashed"] = Clock.millis().toDouble(); l["trashedBy"] = myId(); touch(l)
+}
+
+fun restoreLoan(id: String) {
+    val l = live("loans").firstOrNull { it.s("id") == id && isTrashed(it) } ?: return
+    l.remove("trashed"); l.remove("trashedBy"); touch(l)
+}
+
+/** Whole days left before [loan] leaves Recently deleted for good (0 when it is due now). */
+fun trashDaysLeft(loan: Obj, now: Long = Clock.millis()): Int =
+    kotlin.math.ceil(TRASH_DAYS - (now - loan.num("trashed")) / DAY_MS).toInt().coerceAtLeast(0)
+
+/** The entries in Recently deleted whose time is up and which [may] delete for good. */
+fun expiredTrash(now: Long = Clock.millis(), may: (Obj) -> Boolean): List<Obj> =
+    trashedLoans().filter { trashDaysLeft(it, now) <= 0 && may(it) }
+
+/** The ids of the files that deleting [loanId] for good removes: its own and its payments'. */
+fun filesOfLoanAll(loanId: String): List<String> {
+    val payIds = DB.objs("payments").filter { it.s("loanId") == loanId }.map { it.s("id") }.toSet()
+    return DB.objs("files").filter { !it.b("deleted") && ((it.s("ownerType") == "loan" && it.s("ownerId") == loanId) ||
+        (it.s("ownerType") == "payment" && it.s("ownerId") in payIds)) }.map { it.s("id") }
 }
 
 /** Tombstones a loan, its payments and its files (including files owned by its payments). */
