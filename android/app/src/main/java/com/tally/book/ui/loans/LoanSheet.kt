@@ -72,6 +72,14 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
     // a credit card: the statement's minimum due and pay-by date
     var minDue by remember { mutableDoubleStateOf(existing?.num("minDue") ?: 0.0) }
     var cardDue by remember { mutableStateOf(existing?.s("dueDate").orEmpty()) }
+    // its credit limit, or the card whose limit it shares ("" = its own); the person says so, the bank is never assumed
+    var limit by remember { mutableDoubleStateOf(existing?.num("limit") ?: 0.0) }
+    var limitWith by remember { mutableStateOf(existing?.s("limitWith").orEmpty()) }
+    val limitCards = remember { limitChoices(existing?.s("id").orEmpty()) }
+    // the card's billing days (optional): the statement day and the day it must be paid by; Pay by follows them until typed
+    var billDay by remember { mutableStateOf(existing?.num("billDay")?.toInt()?.takeIf { it in 1..31 }?.toString().orEmpty()) }
+    var payDay by remember { mutableStateOf(existing?.num("payDay")?.toInt()?.takeIf { it in 1..31 }?.toString().orEmpty()) }
+    var cardDueTouched by remember { mutableStateOf(existing != null) }
     var grams by remember { mutableStateOf(existing?.let { editText(it.num("grams")) }.orEmpty()) }
     var note by remember { mutableStateOf(existing?.s("note").orEmpty()) }
     var keepPrivate by remember { mutableStateOf(existing?.b("private") ?: false) }
@@ -127,7 +135,13 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
             listOf("rateUnit", "interestEvery", "dueDay", "repayBy").forEach { d.remove(it) }
         } else if (kind == "card") {
             d["minDue"] = minDue
+            if (n(billDay) in 1.0..31.0) d["billDay"] = n(billDay) else d.remove("billDay")
+            if (n(payDay) in 1.0..31.0) d["payDay"] = n(payDay) else d.remove("payDay")
+            // a new card's figures are from its latest statement (by the bill day), else from today
+            if (!editing) d["startDate"] = lastBillDate(d, today)?.toString() ?: startDate
             d["dueDate"] = cardDue
+            if (limitWith.isNotEmpty() && limitCards.any { it.s("id") == limitWith }) { d["limitWith"] = limitWith; d.remove("limit") }
+            else { d.remove("limitWith"); if (limit > 0) d["limit"] = limit else d.remove("limit") }
             listOf("rateUnit", "interestEvery", "interestMethod", "repayBy", "emi", "tenure", "frequency", "dueDay").forEach { d.remove(it) }
         } else {
             if (kind == "hand") listOf("plan", "emi", "tenure", "frequency", "received").forEach { d.remove(it) }
@@ -225,7 +239,32 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
             if (kind == "card") {
                 MoneyField(minDue, { minDue = it; error = null }, t("card.minDue", "Minimum due"),
                     supporting = t("card.minDue.help", "Leave it empty if you pay the full amount every month."))
-                DateField(cardDue, { cardDue = it; error = null }, t("card.dueDate", "Pay by"))
+                // the billing days, side by side; Pay by fills itself from them until it is picked by hand
+                fun refreshDue(b: String, p: String) {
+                    if (cardDueTouched) return
+                    val probe = obj("billDay" to n(b), "payDay" to n(p))
+                    val st = lastBillDate(probe, today) ?: today
+                    payDateAfter(probe, st)?.let { cardDue = it.toString() }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    TextInput(billDay, { billDay = digitsOnly(it).take(2); error = null; refreshDue(billDay, payDay) }, t("card.billDay", "Statement day"),
+                        keyboard = KeyboardType.Number, placeholder = t("card.billDay.eg", "e.g. 15"), modifier = Modifier.weight(1f))
+                    TextInput(payDay, { payDay = digitsOnly(it).take(2); error = null; refreshDue(billDay, payDay) }, t("card.payDay", "Due day"),
+                        keyboard = KeyboardType.Number, placeholder = t("card.payDay.eg", "e.g. 5"), modifier = Modifier.weight(1f))
+                }
+                Hint(t("card.days.help", "Days of the month. Optional: they fill the pay-by date for you."))
+                DateField(cardDue, { cardDue = it; cardDueTouched = true; error = null }, t("card.dueDate", "Pay by"))
+                if (limitCards.isNotEmpty()) {
+                    FieldTitle(t("card.shares", "Shares its credit limit with"))
+                    ChoiceChips(listOf("" to t("card.shares.none", "No, its own")) + limitCards.map { it.s("id") to loanTitle(it) }, limitWith, { limitWith = it; error = null })
+                }
+                val with = limitCards.firstOrNull { it.s("id") == limitWith }
+                if (with == null) MoneyField(limit, { limit = it; error = null }, t("card.limit", "Credit limit (optional)"))
+                else {
+                    val l = limitRoot(with).num("limit")
+                    Hint(if (l > 0) t("card.limit.uses", "Uses the limit of {card}: {amt}", "card" to loanTitle(limitRoot(with)), "amt" to amtMask(l))
+                        else t("card.limit.usesNone", "Uses the limit of {card}. Add the limit on that card.", "card" to loanTitle(limitRoot(with))))
+                }
             }
 
             if (kind == "hand") {

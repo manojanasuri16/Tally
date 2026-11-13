@@ -116,6 +116,17 @@ private fun LoanBody(id: String, d: Detail) {
             else BigFigure(words.left, v.num("owed"), sub = subtitle)
 
             if (!closed) PendingRow(loan, v) { payingPending = true }
+            // a card whose statement day has passed since its figures were entered: ask for the new ones
+            if (!closed && isCard(loan)) newStatementSince(loan)?.let { d ->
+                AGroup {
+                    item(Space60) {
+                        ARow(
+                            t("card.newStatement", "A new statement came on {date}. Update it.", "date" to dateInWords(d.toString())),
+                            icon = Icons.Rounded.Description, tint = Apple.colors.accent, chevron = true, onClick = { updatingStatement = true },
+                        )
+                    }
+                }
+            }
             if (!closed) NextDue(loan, v)
             if (!closed) PrimaryButton(words.log, { logging = true }, Modifier.fillMaxWidth())
 
@@ -235,6 +246,16 @@ private fun Facts(loan: Obj, v: Obj) {
             item { ARow(t("card.minDue", "Minimum due"), money = loan.num("minDue"), moneyColor = Apple.colors.label) }
             item { ARow(t("card.dueDate", "Pay by"), value = fmtISODate(loan.s("dueDate")).ifEmpty { "—" }) }
             if (v.num("paidSinceStatement") > 0) item { ARow(t("card.paidSince", "Paid since the statement"), money = v.num("paidSinceStatement"), moneyColor = Apple.colors.label) }
+            if (loan.num("billDay") > 0) item { ARow(t("card.billDay", "Statement day"), value = dueDayInWords(loan.num("billDay").toInt())) }
+            if (loan.num("payDay") > 0) item { ARow(t("card.payDay", "Due day"), value = dueDayInWords(loan.num("payDay").toInt())) }
+            val lv = cardLimitView(loan)
+            if (lv.num("limit") > 0) {
+                item { ARow(t("card.limit.row", "Credit limit"), money = lv.num("limit"), moneyColor = Apple.colors.label) }
+                if (lv.b("shared")) item {
+                    ARow(t("card.sharedWith", "Shared with"), value = limitGroup(loan).filter { it.s("id") != loan.s("id") }.joinToString(", ") { loanTitle(it) })
+                }
+                item { ARow(t("card.available", "Available"), money = lv.num("available"), moneyColor = Apple.colors.label) }
+            }
         }
         if (isPersonInstalments(loan)) {
             val given = isGiven(loan)

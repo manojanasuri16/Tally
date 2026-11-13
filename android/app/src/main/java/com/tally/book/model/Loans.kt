@@ -19,6 +19,68 @@ val LOAN_KINDS = listOf("bank", "hand", "gold", "card")
  * worked out here: the next statement brings the bank's own figures ("Update statement").
  */
 fun isCard(loan: Obj): Boolean = loan.s("kind") == "card"
+
+/*
+ * A card's credit limit: its own `limit`, or, when it shares one (`limitWith`: another card's id, as two HDFC cards on one
+ * limit do), that card's. Cards from the same bank are never assumed to share: the person says so. Sharing is followed to the
+ * card that shares with none (the root), so A → B → C all use C's limit; a loop or a missing card ends the chain.
+ */
+
+/** The card whose limit [card] uses: [card] itself when it shares with none. */
+fun limitRoot(card: Obj): Obj {
+    var c = card
+    val seen = hashSetOf(c.s("id"))
+    while (true) {
+        val next = loan(c.s("limitWith"))?.takeIf { isCard(it) && it.s("id") !in seen } ?: return c
+        seen.add(next.s("id")); c = next
+    }
+}
+
+/** The open cards on the same limit as [card] (itself included), by title. */
+fun limitGroup(card: Obj): List<Obj> {
+    val root = limitRoot(card).s("id")
+    return loans().filter { isCard(it) && !it.b("closed") && limitRoot(it).s("id") == root }.sortedBy { loanTitle(it).lowercase() }
+}
+
+/** { limit, used, available, shared } for a card: 0 limit = none given; used = what is owed on every card on the limit. */
+fun cardLimitView(card: Obj, today: LocalDate = Clock.today()): Obj {
+    val limit = limitRoot(card).num("limit")
+    val group = limitGroup(card)
+    val used = group.sumOf { calcOf(it, paymentsOf(it.s("id")), today)?.balance ?: it.num("principal") }
+    return obj("limit" to limit, "used" to used, "available" to max(0.0, limit - used), "shared" to (group.size > 1))
+}
+
+/*
+ * A card's billing days (both optional, days of the month): `billDay`, when the statement is made, and `payDay`, when it must
+ * be paid. With them the statement date is the latest bill day (payments from it on count), the pay-by date fills itself, and
+ * the card says when a new statement has come.
+ */
+
+/** The latest statement date on or before [today] by the card's bill day; null without one. */
+fun lastBillDate(card: Obj, today: LocalDate = Clock.today()): LocalDate? {
+    val day = card.num("billDay").toInt().takeIf { it in 1..31 } ?: return null
+    val here = clampDay(monthKey(today), day)
+    return if (!here.isAfter(today)) here else clampDay(addMonths(monthKey(today), -1), day)
+}
+
+/** The first pay day after [statement] by the card's pay day; null without one. */
+fun payDateAfter(card: Obj, statement: LocalDate): LocalDate? {
+    val day = card.num("payDay").toInt().takeIf { it in 1..31 } ?: return null
+    val here = clampDay(monthKey(statement), day)
+    return if (here.isAfter(statement)) here else clampDay(addMonths(monthKey(statement), 1), day)
+}
+
+/** A statement newer than the figures the card holds has come (by its bill day): the date it came, else null. */
+fun newStatementSince(card: Obj, today: LocalDate = Clock.today()): LocalDate? {
+    val last = lastBillDate(card, today) ?: return null
+    val held = parseISO(card.s("startDate")) ?: return last
+    return if (last.isAfter(held)) last else null
+}
+
+/** The cards [card] may share a limit with: other open cards, but none that already uses [card]'s limit (no loops). */
+fun limitChoices(cardId: String): List<Obj> = loans().filter {
+    isCard(it) && !it.b("closed") && it.s("id") != cardId && (cardId.isEmpty() || limitRoot(it).s("id") != cardId)
+}.sortedBy { loanTitle(it).lowercase() }
 val PAY_KINDS = listOf("emi", "interest", "principal")
 
 /** Money I gave to someone: only a `hand` loan can be given (direction "given"); everything else is money I took. */
@@ -329,6 +391,9 @@ fun validateCard(draft: Obj): String? {
     if (draft.num("principal") < 0) return t("card.err.outstanding", "The outstanding amount cannot be below zero.")
     if (draft.num("minDue") < 0) return t("card.err.min", "The minimum due cannot be below zero.")
     if (draft.num("minDue") > draft.num("principal")) return t("card.err.minMore", "The minimum due cannot be more than the outstanding amount.")
+    if (draft.num("limit") < 0) return t("card.err.limit", "The credit limit cannot be below zero.")
+    for (k in listOf("billDay", "payDay")) if (draft.containsKey(k) && draft.num(k) != 0.0 && draft.num(k) !in 1.0..31.0)
+        return t("card.err.day", "A day of the month is from 1 to 31.")
     parseISO(draft.s("startDate")) ?: return t("card.err.statement", "Please enter the statement date.")
     parseISO(draft.s("dueDate")) ?: return t("card.err.due", "Please enter the date to pay by.")
     return null   // a pay-by date already past is fine: the bill is simply overdue

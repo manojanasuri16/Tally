@@ -100,8 +100,9 @@ fun StatementSheet(loanId: String, onDismiss: () -> Unit) {
     if (theLoan == null) { LaunchedEffect(Unit) { onDismiss() }; return }
     var outstanding by remember { mutableDoubleStateOf(0.0) }
     var minDue by remember { mutableDoubleStateOf(0.0) }
-    val on = remember { todayISO() }   // the new figures count from today
-    var due by remember { mutableStateOf("") }
+    // the new figures count from the latest statement day when the card has one, else from today; Pay by follows the due day
+    val on = remember { lastBillDate(theLoan)?.toString() ?: todayISO() }
+    var due by remember { mutableStateOf(parseISO(on)?.let { payDateAfter(theLoan, it) }?.toString().orEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
     var stamp by remember { mutableIntStateOf(0) }
 
