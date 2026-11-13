@@ -1,6 +1,6 @@
 # Tally security review (2026-11-12)
 
-Independent review of `/home/manoja/Tally` at commit `72e8858` (Tally 0.5.0, versionCode 6), the live relay (project `vnogrkfxlnkxscswiaex`, inspected read-only) and `.github/workflows/keep-awake.yml`. Nothing was changed except this file.
+Independent review of `/home/manoja/Tally` at commit `adddc65` (Tally 0.5.0, versionCode 6), the live relay (project `vnogrkfxlnkxscswiaex`, inspected read-only) and `.github/workflows/keep-awake.yml`. Nothing was changed except this file.
 
 **Verified** means the code path was read end to end, or the behaviour was reproduced live. **Suspected** means it follows from the code but was not exercised.
 
@@ -194,36 +194,36 @@ Independent review of `/home/manoja/Tally` at commit `72e8858` (Tally 0.5.0, ver
 
 ## Fixes (on the device)
 
-Commits `f6f0c99` (L7) and `4295d02` (everything else below). Tests: `LockSecurityTest` (new), `LockModesTest`, `BackupCoreTest`. Design: `docs/DESIGN.md` "App lock" (the seal, the cost table, wrong tries, `holdLock`, screenshots) and "Backups" ("After a lock change").
+Commits `190808f` (L7) and `e06ab59` (everything else below). Tests: `LockSecurityTest` (new), `LockModesTest`, `BackupCoreTest`. Design: `docs/DESIGN.md` "App lock" (the seal, the cost table, wrong tries, `holdLock`, screenshots) and "Backups" ("After a lock change").
 
-- **H2: Fixed** (`4295d02`). The book is sealed under a random 256-bit data key (envelope `enc: 2`). It is wrapped under PBKDF2 of a 20-digit recovery code, which every lock now has (shown and typed back when a lock is first set, offered again before the first backup leaves the phone, and viewable behind the lock). For Tally's own lock it is also wrapped under HKDF(a 32-byte secret kept under an Android Keystore key, PBKDF2(PIN)). A backup or `ledger.json` copied off the phone can only be opened with the recovery code: about 10²⁰ × 150 000 PBKDF2 iterations, roughly 5×10⁷ years on one RTX 4090. On the same phone the PIN still opens a backup; on another phone the recovery code is asked. Books and backups sealed the old way still open, and the first unlock re-seals them (`Ledger.open`). Tally's own lock gets a new recovery code, shown once. The fingerprint and phone-lock copies keep working, with no extra prompt.
+- **H2: Fixed** (`e06ab59`). The book is sealed under a random 256-bit data key (envelope `enc: 2`). It is wrapped under PBKDF2 of a 20-digit recovery code, which every lock now has (shown and typed back when a lock is first set, offered again before the first backup leaves the phone, and viewable behind the lock). For Tally's own lock it is also wrapped under HKDF(a 32-byte secret kept under an Android Keystore key, PBKDF2(PIN)). A backup or `ledger.json` copied off the phone can only be opened with the recovery code: about 10²⁰ × 150 000 PBKDF2 iterations, roughly 5×10⁷ years on one RTX 4090. On the same phone the PIN still opens a backup; on another phone the recovery code is asked. Books and backups sealed the old way still open, and the first unlock re-seals them (`Ledger.open`). Tally's own lock gets a new recovery code, shown once. The fingerprint and phone-lock copies keep working, with no extra prompt.
   - **Remains:** a backup made before the update that already left the phone (Drive, WhatsApp) stays as weak as its old PIN. It cannot be reached; only the person can delete it.
   - **Remains:** with code running as the app on an unlocked or rooted phone, the waits can be skipped and a 4-digit PIN is guessed on the phone's CPU in hours. A long password or the phone's lock is the defence there (DESIGN cost table).
-- **M5: Fixed** (`4295d02`). `holdLock` now records when it was set. It is honoured only if the app comes back within 2 minutes, or within the re-lock delay if that is longer (`LockRules.relockOnReturn`, tested).
-- **L1: Fixed** (`4295d02`). `FLAG_SECURE` is on while a lock is set (the lock screen included) or amounts are hidden, and always while the invite sheet or the recovery code sheet is up (`ScreenGuard`).
+- **M5: Fixed** (`e06ab59`). `holdLock` now records when it was set. It is honoured only if the app comes back within 2 minutes, or within the re-lock delay if that is longer (`LockRules.relockOnReturn`, tested).
+- **L1: Fixed** (`e06ab59`). `FLAG_SECURE` is on while a lock is set (the lock screen included) or amounts are hidden, and always while the invite sheet or the recovery code sheet is up (`ScreenGuard`).
   - **To check on a device:** Compose sheets inherit the flag from the activity window.
-- **L2: Fixed** (`4295d02`). `cache/shared` is emptied when the app comes back to the front, at re-lock and at every start. The cache is not in backups: `BackupCore` copies only the book and `files/`, `allowBackup` is false, and the extraction rules exclude every domain.
+- **L2: Fixed** (`e06ab59`). `cache/shared` is emptied when the app comes back to the front, at re-lock and at every start. The cache is not in backups: `BackupCore` copies only the book and `files/`, `allowBackup` is false, and the extraction rules exclude every domain.
   - **Trade-off:** a viewer that reads lazily loses the file once Tally is back in front.
-- **L3: Fixed** (`4295d02`). After a lock is set or changed, or a book is moved to the new seal:
+- **L3: Fixed** (`e06ab59`). After a lock is set or changed, or a book is moved to the new seal:
   - the restore safety copy is sealed again silently;
   - the share cache is deleted;
   - Tally's backups in the daily folder that are plain, or sealed by an earlier lock this session knows, are rewritten sealed after one question per lock (`BackupReseal`, `BackupCore.reseal`). The rewrite keeps the date and name, and the new file replaces the old one only after it checks out.
   - A PIN change keeps the data key and the recovery code, so older backups of the lock open with the same paper.
   - **Not done:** daily backup is not refused into a shared folder while no lock is set. The footer warning stays.
-- **L7: Fixed** (`f6f0c99`). `packageRelease` and `bundleRelease` fail without the release signing config. Verified with `-PTALLY_STORE_FILE=/nonexistent`. Debug builds and lint are unaffected, and `scripts/release.sh` is unchanged.
-- **Info, no guess limit: Fixed** (`4295d02`). After 5 wrong tries in a row, the waits are 30 s, 1 min, 5 min, 15 min, then 1 hour each.
+- **L7: Fixed** (`190808f`). `packageRelease` and `bundleRelease` fail without the release signing config. Verified with `-PTALLY_STORE_FILE=/nonexistent`. Debug builds and lint are unaffected, and `scripts/release.sh` is unchanged.
+- **Info, no guess limit: Fixed** (`e06ab59`). After 5 wrong tries in a row, the waits are 30 s, 1 min, 5 min, 15 min, then 1 hour each.
   - The count is kept in `DevicePrefs`, so a restart does not reset it, and a clock set back restarts the wait.
   - A right answer resets it. Nothing is wiped.
   - It covers unlock, confirm, the restore's sealed-file stage and the recovery code.
-- **Info, keys in memory after relock: Partly fixed** (`4295d02`). Re-lock zeroes the data key and any remembered older key (`Crypto.forget`) and drops the book.
+- **Info, keys in memory after relock: Partly fixed** (`e06ab59`). Re-lock zeroes the data key and any remembered older key (`Crypto.forget`) and drops the book.
   - Strings from the dropped book (the files key, the recovery code) cannot be zeroed in the JVM.
   - `SyncEngine.checked` (invite secrets) belongs to `sync/` and was left to the relay/membership fixes.
 
 ## Fixes (relay and membership)
 
-Commits `ea6e5cf` (L6), `fd3c481` (the relay: migration `20261112115931_tally_hardening.sql`, deployed 2026-11-12, and the storage alert) and `82ffcf4` (the app: merge rules, signatures, joining, Allow as). Tests: `SyncHardeningTest` (new), `SyncModelTest`, `SyncRejoinTest`, `SyncRestoreTest`, `SyncMembershipTest`; `FakeRelay` mirrors the migration; `SyncLiveTest` passed against the deployed relay and cleaned up after itself. Design: `docs/DESIGN.md` "Joining", "Back on a new phone", "Pins", "Threat model", "Merge rules", "Who wrote what", "The relay", "Limits".
+Commits `9b86852` (L6), `696ccf9` (the relay: migration `20261112115931_tally_hardening.sql`, deployed 2026-11-12, and the storage alert) and `4d6bd71` (the app: merge rules, signatures, joining, Allow as). Tests: `SyncHardeningTest` (new), `SyncModelTest`, `SyncRejoinTest`, `SyncRestoreTest`, `SyncMembershipTest`; `FakeRelay` mirrors the migration; `SyncLiveTest` passed against the deployed relay and cleaned up after itself. Design: `docs/DESIGN.md` "Joining", "Back on a new phone", "Pins", "Threat model", "Merge rules", "Who wrote what", "The relay", "Limits".
 
-- **H1: Fixed** (`fd3c481`, `82ffcf4`).
+- **H1: Fixed** (`696ccf9`, `4d6bd71`).
   - **Filling:** each family has a byte budget for records and key boxes (5 MiB while it has had one member, 20 MiB after). The relay refuses any growth once the families hold 300 MiB or the database is above 425 MiB, so it never reaches the size at which Supabase makes it read-only. Removals, rotations, approvals and deletions are never refused by it. At most 300 epochs per family; boxes of members no longer active are deleted and each member keeps its newest 20.
   - **Freezing sign-up:** a 20-bit proof of work per family (about a second on a phone); 5 an hour and 20 a day per source address (Cloudflare's `cf-connecting-ip`; IPv6 by /64; stored only as a peppered SHA-256, two days); relay-wide sliding windows of 100 an hour and 500 a day.
     - **Checked live:** the address came from `cf-connecting-ip`. A forged `X-Forwarded-For` or `X-Real-IP` did not change it, and a forged `CF-Connecting-IP` was refused by Cloudflare (403).
@@ -231,25 +231,25 @@ Commits `ea6e5cf` (L6), `fd3c481` (the relay: migration `20261112115931_tally_ha
   - **Cleanup:** families that never had a second member and have not pulled for 60 days are deleted by `tally_ping`. The phone says so once and keeps every entry (`SyncResult.Ended`).
   - **Alert:** every three hours, at 50 % or after 25 MB of growth in 24 hours (`grew_24h_bytes`).
   - **Remains:** someone with many addresses can still start families up to the relay-wide window and fill the relay to its ceiling. New growth then stops for every family until the owner deletes the abusive ones; reading, deleting and every security action keep working. Closing this needs accounts or an attestation service, which the design rules out. Tally 0.5.0 and older can no longer start a family (the call now needs the proof of work).
-- **M1: Fixed** (`fd3c481`, `82ffcf4`).
+- **M1: Fixed** (`696ccf9`, `4d6bd71`).
   - **On the relay:** `tally_member_reclaim` refuses the creator as target unless the caller is the creator (moving phones from the old one). It refuses another admin as target when the approving admin made the invite, so a second person must take part: another member makes the invite, or another admin approves.
     - **Why this rule:** a delay with a veto would protect only when the old phone is still in the person's hands, and would slow every real recovery, when the phone is usually lost.
     - **Cost:** in a family whose only two admins are A and B, B's place can be handed back only through an invite made by someone other than A. Otherwise B comes back as someone new.
   - **On screen:** nobody is pre-selected (`likelyMember` is gone). The card shows the new phone's 8-digit code, which the waiting phone also shows, and asks the admin to call and compare it. Allow as asks once, naming the member, with more care for an admin. The creator, or an admin the relay would refuse, shows why instead of the button.
   - **Remains:** an admin can still hand a plain member's place to a phone they control, as an admin could already remove that member.
-- **M2: Fixed** (`82ffcf4`).
+- **M2: Fixed** (`4d6bd71`).
   - **After approval:** nothing already on the phone is shared until the person answers "Share your existing entries with <family>?". The question says how many there are and who is in the family. Share all sends them; "Keep them on this phone only" makes those loans private, so they and their payments and files never leave. Held entries stay back even when edited meanwhile; new ones are shared as usual.
   - **The join question** now says "The invite link says it is from <inviter>. Tally can't check the names in a link. Join only if you know who sent it."
   - **Remains:** new entries made after joining a stranger's family are shared with it. That is what joining means.
-- **M3: Fixed** (`82ffcf4`).
+- **M3: Fixed** (`4d6bd71`).
   - **Rollback:** a pulled row is taken only when it is the same version as the phone's or newer. An older one is refused and the phone's newer copy is sent back up, so a replayed old ciphertext changes nothing and a tombstone cannot be undone.
   - **Future dates:** `updatedAt` more than 10 minutes ahead is clamped, and writes stamp after the version they replace.
   - **Remains:** the relay can withhold updates, and can serve an old copy to a phone that never had the newer one (a new joiner, or a phone away the whole time). Detecting that needs signed history.
-- **M4: Fixed** (`82ffcf4`). Pins come only from an admin's word: approval, the grant, checked boxes, or an admin's signed certificate in the member's record (`tally-pin|1|<family>|<member>|<pub>`). A certificate counts only if it is signed by a pinned key of someone this phone has seen as an admin. A member's record `pub` alone pins nothing.
+- **M4: Fixed** (`4d6bd71`). Pins come only from an admin's word: approval, the grant, checked boxes, or an admin's signed certificate in the member's record (`tally-pin|1|<family>|<member>|<pub>`). A certificate counts only if it is signed by a pinned key of someone this phone has seen as an admin. A member's record `pub` alone pins nothing.
   - A member record written over by someone else is refused, and a phone holding the proved copy sends it back up.
   - **Remains:** a member colluding with the relay could have themselves shown as an admin in `tally_state`. That is the same out-of-scope collusion as before.
   - **Not done:** an "I can't open my box" report from the member's phone. A box sealed to a wrong key can no longer come from a member's record.
-- **L4: Partly fixed** (`82ffcf4`). Every pushed record is signed with the member's family key (envelope field `sig`; older readers ignore it). The merge takes:
+- **L4: Partly fixed** (`4d6bd71`). Every pushed record is signed with the member's family key (envelope field `sig`; older readers ignore it). The merge takes:
   - a member record only from that member or an admin;
   - a tombstone only from the entry's maker, its loan's maker or an admin;
   - never a shared record that says `private: true`.
@@ -257,13 +257,13 @@ Commits `ea6e5cf` (L6), `fd3c481` (the relay: migration `20261112115931_tally_ha
   The screens check the same rule before deleting ("Only <name>, who added this, or a family admin can delete it."). Making someone else's loan private now only hides it on that one phone.
   - **Remains, accepted:** editing someone else's entry is allowed (trust within the family) and is last-writer-wins. Who *first* made an entry (`by`) is only the writer's word for a record a phone first sees through someone else's edit.
   - **Mixed versions:** rows from 0.5.0 phones are unsigned. Newer phones ignore their member-record changes and their deletions until every phone is updated.
-- **L5: Fixed** (`fd3c481`). `tally_state` shows a member who is not an admin only the invites they made. Cancelling was already limited to the maker or an admin.
-- **L6: Fixed** (`ea6e5cf`). Sign-ups and the email provider are off on the project (pushed with `supabase config push`, which changed only those settings). Checked live: `/auth/v1/settings` shows `disable_signup: true` and no email provider, and a sign-up gets 422.
+- **L5: Fixed** (`696ccf9`). `tally_state` shows a member who is not an admin only the invites they made. Cancelling was already limited to the maker or an admin.
+- **L6: Fixed** (`9b86852`). Sign-ups and the email provider are off on the project (pushed with `supabase config push`, which changed only those settings). Checked live: `/auth/v1/settings` shows `disable_signup: true` and no email provider, and a sign-up gets 422.
 - **Info, unbounded responses: Fixed.** `HttpRelay` reads at most 10 MiB of any answer (`readCapped`), and the largest honest one is now a 6 MiB file.
 - **Info, `tally_relay_usage` / `tally_ping` call volume: Fixed.**
   - The usage call reads the database size from a copy at most 5 minutes old.
   - The ping's sweeps run at most every 10 minutes, and it still answers 1.
   - Both stay without credentials (the workflow needs that). They give only relay-wide totals, now including the 24-hour growth.
-- **Info, future migrations and default grants: Fixed** (`fd3c481`, `82ffcf4`). The default privileges for objects postgres creates no longer grant anything to `anon`, `authenticated` or PUBLIC. `SyncHardeningTest.everyNewRelayObjectRevokesTheDefaultGrants` checks that every migration revokes the grants of what it creates.
-- **Info, invite secrets in memory after relock: Fixed** (`82ffcf4`). The engine forgets checked join requests and their secrets whenever the book leaves READY (`SyncEngine.forgetSecrets`).
+- **Info, future migrations and default grants: Fixed** (`696ccf9`, `4d6bd71`). The default privileges for objects postgres creates no longer grant anything to `anon`, `authenticated` or PUBLIC. `SyncHardeningTest.everyNewRelayObjectRevokesTheDefaultGrants` checks that every migration revokes the grants of what it creates.
+- **Info, invite secrets in memory after relock: Fixed** (`4d6bd71`). The engine forgets checked join requests and their secrets whenever the book leaves READY (`SyncEngine.forgetSecrets`).
 - **Info, writes under the old key after a leave: Accepted.** It still waits for an admin's sync, and exploiting it still needs relay database access.
