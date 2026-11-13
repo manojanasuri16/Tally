@@ -126,12 +126,13 @@ private fun readHome(mineChosen: Boolean): Home {
     val all = loans().filter { !mineOnly || isMine(it) }
     val open = all.filter { !it.b("closed") }
     val owed = all.associate { it.s("id") to loanView(it).num("owed") }
-    val (shared, priv) = splitPrivate(open, owed)
+    val (_, priv) = splitPrivate(open, owed)
     val taken = open.filter { !isGiven(it) }
     val kinds = LOAN_KINDS + taken.map { it.s("kind") }.filter { it !in LOAN_KINDS }.distinct()
-    val groups = kinds.map { k -> k to shared.filter { !isGiven(it) && it.s("kind") == k }.sortedBy { loanTitle(it).lowercase() } }.filter { it.second.isNotEmpty() }
+    // private and shared entries together in their kind groups; a private row carries a lock (one list per kind, nothing to look for twice)
+    val groups = kinds.map { k -> k to open.filter { !isGiven(it) && it.s("kind") == k }.sortedBy { loanTitle(it).lowercase() } }.filter { it.second.isNotEmpty() }
     val given = open.filter { isGiven(it) }.sortedBy { loanTitle(it).lowercase() }
-    val givenShared = shared.filter { isGiven(it) }.sortedBy { loanTitle(it).lowercase() }
+    val givenShared = given
     val closed = all.filter { it.b("closed") }.sortedByDescending { it.s("closedDate") }
     val only: (Obj) -> Boolean = { !mineOnly || isMine(it) }
     val rows = dueList(only = only)
@@ -192,7 +193,6 @@ fun LoansScreen() {
                         val sub = when { showOwner -> RowSub.OWNER; home.showAdder && !easy && !home.canFilter -> RowSub.ADDER; else -> RowSub.NONE }
                         home.groups.forEach { (kind, list) -> LoanGroup(kindLabel(kind), list, home.owed, sub) }
                         if (home.given.isNotEmpty()) LoanGroup(t("home.gave", "Money I gave"), home.given, home.owed, sub)
-                        if (home.priv.loans.isNotEmpty()) PrivateGroup(home.priv, home.owed)
                         if (home.closed.isNotEmpty()) ClosedGroup(home.closed, closedOpen) { closedOpen = !closedOpen }
                         if (home.trash.isNotEmpty()) TrashGroup(home.trash, trashOpen) { trashOpen = !trashOpen }
                     }
@@ -268,7 +268,10 @@ private fun DueRow(loan: Obj, date: String, amount: Double, overdue: Boolean, ta
     val label = if (given) t("home.received", "Received") else t("home.pay", "Pay")
     val details: @Composable (Modifier) -> Unit = { m ->
         Column(m.pressable(onClick = onOpen).padding(vertical = 4.dp)) {
-            Text(loanTitle(loan), style = Apple.type.body.copy(fontWeight = FontWeight.SemiBold), color = Apple.colors.label)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(loanTitle(loan), style = Apple.type.body.copy(fontWeight = FontWeight.SemiBold), color = Apple.colors.label)
+                if (loan.b("private")) { Spacer(Modifier.width(6.dp)); PrivateMark() }
+            }
             listOf(loanSecond(loan), owner.orEmpty()).filter { it.isNotEmpty() }.joinToString(" · ").takeIf { it.isNotEmpty() }
                 ?.let { Text(it, style = Apple.type.subheadline, color = Apple.colors.secondaryLabel) }
             // an overdue payment is a pill and a red date; the date wraps under the pill when there is no room beside it
@@ -319,45 +322,10 @@ private fun LoanGroup(title: String, list: List<Obj>, owed: Map<String, Double>,
     }
 }
 
-/** Open private loans together: taken and given, one header total per direction, a line saying they stay on this phone. */
-@Composable
-private fun PrivateGroup(p: PrivateLoans, owed: Map<String, Double>) {
-    val total = listOfNotNull(
-        if (p.hasTaken) "${t("home.toPay", "To pay")} ${amtText(p.toPay)}" else null,
-        if (p.hasGiven) "${loanWords(true).toReturn} ${amtText(p.toComeBack)}" else null,
-    ).joinToString(" · ")
-    // a section heading with the lock and the totals, then the private entries in the same kind groups as the shared ones
-    Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 18.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Rounded.Lock, null, Modifier.size(18.dp), tint = Apple.colors.secondaryLabel)
-            Spacer(Modifier.width(8.dp))
-            Text(t("home.private", "Only on this phone"), Modifier.weight(1f), style = Apple.type.title3.copy(fontWeight = FontWeight.SemiBold), color = Apple.colors.label)
-        }
-        // Easy mode drops the totals (the figure above already says it)
-        if (!LocalEasy.current) Text(total, style = Apple.type.subheadline, color = Apple.colors.secondaryLabel)
-        Text(t("home.private.foot", "Your family doesn't see these."), style = Apple.type.footnote, color = Apple.colors.secondaryLabel)
-    }
-    val taken = p.loans.filter { !isGiven(it) }
-    val kinds = LOAN_KINDS + taken.map { it.s("kind") }.filter { it !in LOAN_KINDS }.distinct()
-    val groups = kinds.map { k -> kindLabel(k) to taken.filter { it.s("kind") == k } } + (t("home.gave", "Money I gave") to p.loans.filter { isGiven(it) })
-    groups.filter { it.second.isNotEmpty() }.forEach { (title, list) ->
-        AGroup(title = title) {
-            list.forEach { l ->
-                item {
-                    ARow(
-                        loanTitle(l), sub = loanSecond(l).ifBlank { null },
-                        money = owed[l.s("id")] ?: 0.0, moneyColor = Apple.colors.label, chevron = true, onClick = { openLoan(l.s("id")) },
-                    )
-                }
-            }
-        }
-    }
-}
-
-/** The small lock on a private loan. */
+/** The lock on a private loan: in the accent colour, so a private row stands out in a group of shared ones. */
 @Composable
 fun PrivateMark() {
-    Icon(Icons.Rounded.Lock, t("loan.private", "Private"), Modifier.size(16.dp), tint = Apple.colors.tertiaryLabel)
+    Icon(Icons.Rounded.Lock, t("loan.private", "Private"), Modifier.size(16.dp), tint = Apple.colors.accent)
 }
 
 @Composable
