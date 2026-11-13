@@ -187,8 +187,11 @@ fun AppleSwitch(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, modifie
 fun SegmentedControl(
     options: List<Pair<String, String>>, selected: String?, onSelect: (String) -> Unit,
     modifier: Modifier = Modifier, enabled: Boolean = true, colors: Map<String, Color> = emptyMap(),
+    /** A taller control with bigger labels, for a switch that steers a whole screen (home's Everyone / Mine). */
+    tall: Boolean = false,
 ) {
     if (options.isEmpty()) return
+    val minH = if (tall) 44.dp else 32.dp
     // Two to four short options fit a segmented control. Longer words (Telugu, Hindi) or large text (the phone's own large font, Easy mode)
     // would cramp it, so the same choice is drawn as capsules that wrap, which grow with the text.
     val fits = options.size in 2..4 && options.all { it.second.length <= 14 } && options.sumOf { it.second.length } <= 36 && !bigText()
@@ -213,11 +216,11 @@ fun SegmentedControl(
             val p = m.first().measure(androidx.compose.ui.unit.Constraints.fixed(segW, cons.maxHeight))
             layout(cons.maxWidth, cons.maxHeight) { p.place(IntOffset((segW * pos.value).roundToInt(), 0)) }
         }
-        Row(Modifier.fillMaxWidth().heightIn(min = 32.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().heightIn(min = minH), verticalAlignment = Alignment.CenterVertically) {
             options.forEachIndexed { i, (v, label) ->
                 val sel = i == idx
                 Row(
-                    Modifier.weight(1f).heightIn(min = 32.dp)
+                    Modifier.weight(1f).heightIn(min = minH)
                         .semantics { role = Role.Tab; this.selected = sel }
                         .pressDim(enabled = enabled, role = null) { if (!sel) { haptics.tick(); onSelect(v) } }
                         .padding(horizontal = 6.dp, vertical = 5.dp),
@@ -225,7 +228,7 @@ fun SegmentedControl(
                 ) {
                     colors[v]?.let { Box(Modifier.size(8.dp).clip(AppleShapes.capsule).background(it)); Spacer(Modifier.width(6.dp)) }
                     Text(
-                        label, style = Apple.type.footnote.copy(fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Medium),
+                        label, style = (if (tall) Apple.type.subheadline else Apple.type.footnote).copy(fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Medium),
                         color = c.label, textAlign = TextAlign.Center,
                     )
                 }

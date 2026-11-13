@@ -51,6 +51,7 @@ import com.tally.book.ui.theme.Motion
 import com.tally.book.ui.theme.EasyMode
 import com.tally.book.ui.theme.LocalEasy
 import com.tally.book.ui.theme.bigText
+import com.tally.book.ui.theme.gutter
 import com.tally.book.ui.theme.stackGap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -167,7 +168,15 @@ fun LoansScreen() {
             t("app.name", "Tally"), back = null, largeTitle = true,
             actions = { BarIcon(Icons.Rounded.Group, t("home.family", "Family"), { AppNav.go(ROUTE_FAMILY) }) },
         ) { pad ->
-            Box(Modifier.fillMaxSize().padding(pad)) {
+            Column(Modifier.fillMaxSize().padding(pad)) {
+            // Everyone / Mine stays pinned above the list, so it is one tap away however far down the list is scrolled
+            if (home.any && home.canFilter) SegmentedControl(
+                listOf("all" to t("home.view.all", "Everyone"), "mine" to t("home.view.mine", "Mine")),
+                if (home.mineOnly) "mine" else "all",
+                { v -> mineChosen = v == "mine"; DevicePrefs.set(VIEW_KEY, if (mineChosen) "mine" else null) },
+                Modifier.padding(start = gutter(), end = gutter(), top = 4.dp, bottom = 8.dp), tall = true,
+            )
+            Box(Modifier.fillMaxWidth().weight(1f)) {
                 PullRefreshIndicator(pull)
                 Column(
                     Modifier.fillMaxSize().pullRefreshContent(pull).verticalScroll(rememberScrollState()).padding(ScreenPadding),
@@ -179,11 +188,6 @@ fun LoansScreen() {
                         syncStatusLine?.let { line -> Box(Modifier.padding(start = 4.dp)) { line() } }
                         backupLine?.invoke()
                     } else {
-                        if (home.canFilter) SegmentedControl(
-                            listOf("all" to t("home.view.all", "Everyone"), "mine" to t("home.view.mine", "Mine")),
-                            if (home.mineOnly) "mine" else "all",
-                            { v -> mineChosen = v == "mine"; DevicePrefs.set(VIEW_KEY, if (mineChosen) "mine" else null) },
-                        )
                         HomeHero(home)
                         // in Everyone, each row says whose it is; in Mine they are all mine
                         val showOwner = home.canFilter && !home.mineOnly
@@ -198,6 +202,7 @@ fun LoansScreen() {
                     }
                     PrimaryButton(t("home.addLoan", "Add an entry"), { adding = true }, Modifier.fillMaxWidth().padding(top = 4.dp))
                 }
+            }
             }
         }
     }
