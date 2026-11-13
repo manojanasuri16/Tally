@@ -18,7 +18,7 @@ val PAY_KINDS = listOf("emi", "interest", "principal")
 fun isGiven(loan: Obj): Boolean = loan.s("kind") == "hand" && loan.s("direction") == "given"
 
 /** An interest-only loan (hand or gold kind) that charges nothing (rate 0): never due, never overdue, simply still owed. */
-fun isNoInterest(loan: Obj): Boolean = loan.s("kind") in setOf("hand", "gold") && loan.num("rate") <= 0
+fun isNoInterest(loan: Obj): Boolean = loan.s("kind") in setOf("hand", "gold") && loan.num("rate") <= 0 && !isPersonInstalments(loan)
 
 /** A loan whose principal may carry a "repay by" date: person-to-person loans and loans against something. */
 fun hasRepayBy(kind: String?): Boolean = kind == "hand" || kind == "gold"
@@ -32,7 +32,7 @@ fun loanView(loan: Obj, today: LocalDate = Clock.today()): Obj =
 internal fun calcOf(loan: Obj, payments: List<Obj>, today: LocalDate): LoanCalc? {
     val start = parseISO(loan.s("startDate")) ?: return null
     val pays = sortedLive(payments, loan.s("id"))
-    return if (loan.s("kind") == "bank") calcInstalments(loan, pays, start, today)
+    return if (isInstalments(loan)) calcInstalments(instalmentBasis(loan), pays, start, today)
     else calcInterestOnly(loan, pays, start, today, isNoInterest(loan))
 }
 
@@ -52,6 +52,9 @@ internal fun calcOf(loan: Obj, payments: List<Obj>, today: LocalDate): LoanCalc?
  * emiTooLow (the instalment never clears the loan), flatInterestPart (flat: interest in each instalment, else 0),
  * weekday (1 = Monday .. 7 = Sunday for weekly and fortnightly loans, else 0), dueDay (monthly loans, else 0).
  *
+ * A person's instalment loan (`plan` "instalments", isInstalments) has the bank keys too, worked out on instalmentBasis, plus
+ * totalToRepay (each instalment × how many) and extra (what that is over the money received); it keeps the hand keys below.
+ *
  * hand and gold: interestEvery, periodInterest (one period's interest on what is owed now, or on the full amount when flat),
  * interestPending, periodsPending, given, noInterest, repayBy ("" when none), repayDue (still owed and repayBy falls in this month
  * or earlier: the remaining amount is a principal item in the due list), repayOverdue (repayBy has passed, something still owed),
@@ -69,7 +72,8 @@ fun loanView(loan: Obj, payments: List<Obj>, today: LocalDate): Obj {
     val pending = slots.filter { it.due.isBefore(today) }
     val month = slots.filter { !it.due.isAfter(monthEnd) }
     val overdue = first != null && first.due.isBefore(today)
-    val yearly = kind != "bank" && interestEvery(loan) == "year"
+    val instalments = isInstalments(loan)
+    val yearly = !instalments && interestEvery(loan) == "year"
     val periodEnd = if (yearly) LocalDate.of(today.year, 12, 31) else monthEnd
     val hasPaid = c?.hasPaid ?: false
     val open = !closed && c != null && (balance > 0 || slots.isNotEmpty())
@@ -86,7 +90,7 @@ fun loanView(loan: Obj, payments: List<Obj>, today: LocalDate): Obj {
         "monthDue" to month.sumOf { it.left }, "monthDueCount" to month.size.toDouble(),
         "paidUpTo" to (paidUpToOf(loan)?.toString() ?: ""), "paidUpToCount" to (c?.prePaid ?: 0).toDouble(),
     )
-    if (kind == "bank") {
+    if (instalments) {
         val freq = frequencyOf(loan)
         val start = parseISO(loan.s("startDate"))
         val n = c?.count ?: tenureOf(loan)
@@ -104,7 +108,9 @@ fun loanView(loan: Obj, payments: List<Obj>, today: LocalDate): Obj {
         v["emiTooLow"] = !closed && balance > 0 && c != null && !c.clears
         v["flatInterestPart"] = c?.flatInterestPart ?: 0.0
         v["weekday"] = if ((freq == "week" || freq == "fortnight") && start != null) start.dayOfWeek.value.toDouble() else 0.0
-        v["dueDay"] = if (freq == "month") loan.num("dueDay").toInt().let { if (it in 1..31) it else start?.dayOfMonth ?: 0 }.toDouble() else 0.0
+        v["totalToRepay"] = if (isPersonInstalments(loan)) totalToRepay(loan) else 0.0
+        v["extra"] = if (isPersonInstalments(loan)) instalmentExtra(loan) else 0.0
+        v["dueDay"] = if (freq == "month") instalmentBasis(loan).num("dueDay").toInt().let { if (it in 1..31) it else start?.dayOfMonth ?: 0 }.toDouble() else 0.0
     } else {
         v["interestEvery"] = interestEvery(loan)
         v["periodInterest"] = if (closed) 0.0 else c?.periodInterestNow ?: 0.0
@@ -148,7 +154,7 @@ fun dueList(today: LocalDate = Clock.today(), sharedOnly: Boolean = false): List
         if (v.num("monthDueCount") > 0) {
             val pend = v.num("pendingAmount")
             rows.add(obj("loan" to l, "date" to v.s("nextDueDate"), "amount" to v.num("monthDue"), "overdue" to v.b("overdue"),
-                "given" to given, "kind" to if (l.s("kind") == "bank") "emi" else "interest",
+                "given" to given, "kind" to if (isInstalments(l)) "emi" else "interest",
                 "pending" to pend, "pendingCount" to v.num("pendingCount"), "upcoming" to v.num("monthDue") - pend, "count" to v.num("monthDueCount")))
         }
         if (v.b("repayDue"))
@@ -200,7 +206,7 @@ fun reachedZero(owedBefore: Double, owedAfter: Double): Boolean = owedBefore > 0
 fun suggestPayment(loan: Obj, today: LocalDate = Clock.today()): Obj {
     if (isNoInterest(loan)) return obj("kind" to "principal", "amount" to 0.0)
     val v = loanView(loan, today)
-    if (loan.s("kind") == "bank") return obj("kind" to "emi", "amount" to v.num("nextDueAmount"))
+    if (isInstalments(loan)) return obj("kind" to "emi", "amount" to v.num("nextDueAmount"))
     val amount = if (v.num("owed") > 0) v.num("periodInterest") else v.num("nextDueAmount")
     return obj("kind" to "interest", "amount" to amount)
 }
@@ -240,6 +246,14 @@ fun validateLoan(draft: Obj): String? {
             return t("loan.err.rateChange.flat", "A new rate can only be set on an entry whose interest is on the amount still owed.")
         for (c in changes) validateRateChangeAt(start, c.s("from"), c.num("rate"), c["emi"]?.let { n(it) })?.let { return it }
         if (changes.map { it.s("from") }.toSet().size != changes.size) return t("loan.err.rateChange.twice", "There are two rate changes on the same date.")
+    } else if (isPersonInstalments(draft)) {
+        val f = draft.s("frequency")
+        if (f.isNotEmpty() && f !in FREQUENCIES) return t("loan.err.frequency", "Please choose how often the instalment is paid.")
+        if (draft.num("emi") <= 0) return t("loan.err.instalment", "Please enter the amount of each payment.")
+        val tenure = draft.num("tenure")
+        if (tenure <= 0 || tenure != kotlin.math.floor(tenure)) return t("loan.err.count", "Please enter how many payments there are, as a whole number.")
+        if (draft.num("received") < 0) return t("loan.err.received", "The amount received cannot be below zero.")
+        if (draft.num("received") > draft.num("principal")) return t("loan.err.received.more", "The amount received cannot be more than the amount itself.")
     } else {
         val e = draft.s("interestEvery")
         if (e.isNotEmpty() && e != "month" && e != "year") return t("loan.err.every", "Please choose whether interest is paid every month or every year.")
@@ -300,6 +314,6 @@ fun validatePayment(draft: Obj, today: LocalDate = Clock.today()): String? {
     val d = parseISO(draft.s("date")) ?: return t("pay.err.date", "Please enter the date of the payment.")
     if (d.isAfter(today)) return t("pay.err.future", "The payment date cannot be in the future.")
     val k = draft.s("kind")
-    if (k !in PAY_KINDS || (k == "emi" && l.s("kind") != "bank")) return t("pay.err.kind", "Please choose what the payment was for.")
+    if (k !in PAY_KINDS || (k == "emi" && !isInstalments(l))) return t("pay.err.kind", "Please choose what the payment was for.")
     return null
 }

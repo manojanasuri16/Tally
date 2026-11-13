@@ -47,6 +47,8 @@ fun securedTitle(pledge: String?, text: String? = null): String = when (pledge) 
  * (a bank or gold loan keeps "Principal"); [given] turns the hand loan around ("Interest received", "Got some of the amount back").
  */
 fun payKindLabel(kind: String?, loanKind: String? = null, given: Boolean = false): String = when {
+    kind == "emi" && loanKind == "hand" && given -> t("pay.kind.instalment.given", "Instalment received")
+    kind == "emi" && loanKind == "hand" -> t("pay.kind.instalment", "Instalment")
     kind == "emi" -> t("pay.kind.emi", "EMI")
     kind == "interest" && given -> t("pay.kind.interest.given", "Interest received")
     kind == "interest" -> t("pay.kind.interest", "Interest")
@@ -106,7 +108,7 @@ fun instalmentsInWords(count: Int, frequency: String?): String = when (frequency
  * interest-only loans "Interest pending: ₹3,000 (3 months)" (or years), bank loans "Instalments pending: ₹17,770 (2)".
  */
 fun pendingInWords(loan: Obj, amountText: String, count: Int): String =
-    if (loan.s("kind") == "bank") t("loan.pending.emi", "Instalments pending: {amount} ({count})", "amount" to amountText, "count" to count)
+    if (isInstalments(loan)) t("loan.pending.emi", "Instalments pending: {amount} ({count})", "amount" to amountText, "count" to count)
     else {
         val periods = if (interestEvery(loan) == "year") tp("loan.count.year", count, "{n} year", "{n} years")
         else tp("loan.count.month", count, "{n} month", "{n} months")

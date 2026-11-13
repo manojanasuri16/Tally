@@ -81,12 +81,32 @@ fun addedByLine(by: String, atMillis: Double, updatedBy: String, myName: (String
     else added
 }
 
+/** How a person's entry is paid back, from the stored fields: "instalments" (plan), "none" (rate 0) or "interest". */
+fun personPlanOf(loan: Obj): String = when {
+    loan.s("plan") == "instalments" -> "instalments"
+    loan.num("rate") <= 0 -> "none"
+    else -> "interest"
+}
+
 /** What the interest choice of a hand loan form is, from the stored fields: "none" (rate 0), "month" or "year". */
 fun interestChoice(rate: Double, rateUnit: String): String = if (rate <= 0) "none" else if (rateUnit == "month") "month" else "year"
 
 /** The kinds of payment that make sense for a loan kind: a bank loan has EMIs and part-payments; hand and gold loans pay interest and the principal. */
 fun payKindsFor(loanKind: String): List<String> =
     if (loanKind == "bank") listOf("emi", "principal") else listOf("interest", "principal")
+
+/**
+ * The kinds of payment for one loan: instalment loans (a bank loan, or a person's with fixed instalments) have instalments and
+ * part-payments; a no-interest loan only part repayments; other hand and gold loans interest and part repayments. [keep] as below.
+ */
+fun payKindOptions(loan: Obj, keep: String?): List<String> {
+    val base = when {
+        com.tally.book.model.isInstalments(loan) -> listOf("emi", "principal")
+        com.tally.book.model.isNoInterest(loan) -> listOf("principal")
+        else -> payKindsFor(loan.s("kind"))
+    }
+    return if (!keep.isNullOrEmpty() && keep !in base && keep in com.tally.book.model.PAY_KINDS) base + keep else base
+}
 
 /** [payKindsFor] plus [keep] (a payment already saved with another kind keeps showing it). */
 fun payKindOptions(loanKind: String, keep: String?): List<String> {
@@ -114,7 +134,7 @@ fun splitPrivate(open: List<Obj>, owed: Map<String, Double>): Pair<List<Obj>, Pr
  */
 fun dueRowNote(loan: Obj, pending: Double, count: Int, pendingText: String): String? {
     val parts = ArrayList<String>(2)
-    if (count > 1 && loan.s("kind") == "bank" && com.tally.book.model.frequencyOf(loan) != "month")
+    if (count > 1 && com.tally.book.model.isInstalments(loan) && com.tally.book.model.frequencyOf(loan) != "month")
         parts.add(tp("home.payments", count, "{n} payment", "{n} payments"))
     if (pending > 0.005) parts.add(t("home.includesPending", "includes {amt} pending", "amt" to pendingText))
     return parts.joinToString(" · ").ifEmpty { null }

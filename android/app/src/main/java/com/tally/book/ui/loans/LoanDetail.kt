@@ -180,7 +180,7 @@ private fun NextDue(loan: Obj, v: Obj) {
         if (v.b("noInterest")) {
             item { NoteRow(t("loan.noInterest", "No interest. Pay back when you can.")) }
         } else if (v.b("paidThisPeriod")) {
-            val monthly = loan.s("kind") == "bank" || v.s("interestEvery") == "month"
+            val monthly = isInstalments(loan) || v.s("interestEvery") == "month"
             item(Space60) {
                 ARow(
                     if (monthly) w.paidMonth else w.paidYear,
@@ -229,10 +229,20 @@ private fun Facts(loan: Obj, v: Obj) {
     val kind = loan.s("kind")
     AGroup(title = t("loan.details", "Details")) {
         item { ARow(loanWords(loan).amount, money = loan.num("principal"), moneyColor = Apple.colors.label) }
-        if (kind == "bank") {
+        if (isPersonInstalments(loan)) {
+            val given = isGiven(loan)
+            if (loan.num("received") > 0) item {
+                ARow(if (given) t("loan.received.given", "Actually handed over") else t("loan.received", "Actually received"), money = loan.num("received"), moneyColor = Apple.colors.label)
+            }
+            item { ARow(if (given) t("loan.total.given", "To get back in all") else t("loan.total", "To pay back in all"), money = v.num("totalToRepay"), moneyColor = Apple.colors.label) }
+            if (v.num("extra") > 0) item {
+                ARow(if (given) t("loan.extra.given", "Extra you get") else t("loan.extra", "Extra you pay"), money = v.num("extra"), moneyColor = Apple.colors.label)
+            }
+        }
+        if (isInstalments(loan)) {
             val freq = v.s("frequency").ifEmpty { frequencyOf(loan) }
             item { ARow(if (freq == "month") t("loan.emi.short", "EMI") else t("loan.emi.each.short", "Each payment"), money = v.num("emi"), moneyColor = Apple.colors.label) }
-            item { ARow(t("loan.rate", "Interest rate"), value = rateWithMethodInWords(v.num("currentRate"), "year", v.s("interestMethod"))) }
+            if (kind == "bank") item { ARow(t("loan.rate", "Interest rate"), value = rateWithMethodInWords(v.num("currentRate"), "year", v.s("interestMethod"))) }
             item {
                 ARow(
                     t("loan.instalment", "Payments"),

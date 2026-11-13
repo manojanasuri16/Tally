@@ -56,7 +56,7 @@ fun PaymentSheet(loanId: String, existing: Obj?, sms: String? = null, startKind:
             else -> suggestPayment(theLoan)
         }
     }
-    val options = remember(loanId) { payKindOptions(theLoan.s("kind"), existing?.s("kind")) }
+    val options = remember(loanId) { payKindOptions(theLoan, existing?.s("kind")) }
     val saved = remember { existing?.let { filesOf("payment", it.s("id")) } ?: emptyList() }
 
     var amount by remember { mutableDoubleStateOf(existing?.num("amount") ?: suggestion.num("amount")) }
@@ -108,11 +108,14 @@ fun PaymentSheet(loanId: String, existing: Obj?, sms: String? = null, startKind:
         Text(theLoan.s("name"), Modifier.padding(start = 4.dp), style = Apple.type.subheadline, color = Apple.colors.secondaryLabel)
         MoneyField(amount, { amount = it; amountTouched = true; error = null }, if (given) t("pay.amount.given", "Amount received") else t("pay.amount", "Amount paid"))
         DateField(date, { date = it; error = null }, t("pay.date", "Date"))
-        Text(t("pay.for", "What is it for?"), Modifier.padding(start = 14.dp), style = Apple.type.footnote, color = Apple.colors.secondaryLabel)
-        ChoiceChips(options.map { it to payKindLabel(it, theLoan.s("kind"), given) }, kind, { k ->
-            kind = k; error = null
-            if (!amountTouched) amount = if (k == suggestion.s("kind")) suggestion.num("amount") else 0.0
-        })
+        // one kind of payment (a no-interest entry: part repayments only) needs no question
+        if (options.size > 1) {
+            Text(t("pay.for", "What is it for?"), Modifier.padding(start = 14.dp), style = Apple.type.footnote, color = Apple.colors.secondaryLabel)
+            ChoiceChips(options.map { it to payKindLabel(it, theLoan.s("kind"), given) }, kind, { k ->
+                kind = k; error = null
+                if (!amountTouched) amount = if (k == suggestion.s("kind")) suggestion.num("amount") else 0.0
+            })
+        }
 
         if (!showDetails) {
             PlainButton(t("pay.addDetails", "Add details"), { showDetails = true }, Modifier.align(Alignment.Start), bold = true)

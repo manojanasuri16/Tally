@@ -478,10 +478,13 @@ fun EditSheet(
     ) {
         if (locked) androidx.activity.compose.BackHandler { close() }
         ElevatedLevel {
-            Column(Modifier.fillMaxWidth().imePadding()) {
+            // A form takes the full height and keeps it. When the sheet was only as tall as its fields, every keyboard change resized it:
+            // tapping from a text field to an amount field (the keyboard swaps, hiding for a moment) dropped the sheet and raised it
+            // again, which looked like the form closing and opening. Now the keyboard only shrinks the scrolling part.
+            Column(Modifier.fillMaxWidth().then(if (form) Modifier.fillMaxHeight() else Modifier).imePadding()) {
                 SheetHeader(title, close)
                 Column(
-                    Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(horizontal = if (easy) 20.dp else 16.dp).padding(top = 8.dp, bottom = 24.dp),
+                    Modifier.weight(1f, fill = form).verticalScroll(rememberScrollState()).padding(horizontal = if (easy) 20.dp else 16.dp).padding(top = 8.dp, bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(stackGap()),
                 ) {
                     content()

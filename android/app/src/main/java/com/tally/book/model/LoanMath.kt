@@ -46,6 +46,42 @@ fun pledgeTextOf(loan: Obj): String = if (pledgeOf(loan) == "other") loan.s("ple
 /** The number of instalments a bank loan was agreed for (`tenure`); 0 when not given. */
 fun tenureOf(loan: Obj): Int = max(0, loan.num("tenure").toInt())
 
+/**
+ * A loan paid back in fixed instalments: every bank loan, and a loan from (or to) a person with `plan` "instalments" (a lender who
+ * collects ₹1,000 every week for 12 weeks on ₹10,000). Such a loan has `emi`, `tenure` and `frequency`, and EMI payments cover the
+ * instalments in order. Everything else is interest-only (or no interest).
+ */
+fun isInstalments(loan: Obj): Boolean = loan.s("kind") == "bank" || (loan.s("kind") == "hand" && loan.s("plan") == "instalments")
+
+/** A person's instalment loan (not a bank loan): no rate, the instalments add up to what is paid back. */
+fun isPersonInstalments(loan: Obj): Boolean = loan.s("kind") == "hand" && loan.s("plan") == "instalments"
+
+/** What a person's instalment loan pays back in all: each instalment × how many (12 × ₹1,000 = ₹12,000); 0 when either is missing. */
+fun totalToRepay(loan: Obj): Double = if (loan.num("emi") > 0 && tenureOf(loan) > 0) loan.num("emi") * tenureOf(loan) else 0.0
+
+/**
+ * What a person's instalment loan costs over what was handed over: the total paid back less `received` (the money actually given, e.g.
+ * ₹9,500 of ₹10,000), or less the amount when `received` is not given. 0 when it cannot be worked out or is not more.
+ */
+fun instalmentExtra(loan: Obj): Double {
+    val total = totalToRepay(loan)
+    val got = loan.num("received").takeIf { it > 0 } ?: loan.num("principal")
+    return if (total <= 0 || got <= 0) 0.0 else max(0.0, total - got)
+}
+
+/**
+ * The loan the instalment arithmetic sees for a person's instalment loan: the instalments are all that is paid back, so the amount
+ * is their total and there is no rate (the lender's profit is in the instalments). A bank loan is itself.
+ */
+internal fun instalmentBasis(loan: Obj): Obj {
+    if (!isPersonInstalments(loan)) return loan
+    val b = loan.copyObj()
+    val total = totalToRepay(loan)
+    if (total > 0) b["principal"] = total
+    b["rate"] = 0.0; b.remove("interestMethod"); b.remove("rateChanges"); b.remove("dueDay")
+    return b
+}
+
 /** The period a hand or gold loan pays interest in: "month" or "year". */
 fun interestEvery(loan: Obj): String {
     val e = loan.s("interestEvery")
@@ -304,8 +340,8 @@ internal fun calcInterestOnly(loan: Obj, pays: List<Obj>, start: LocalDate, toda
 fun suggestPaidUpTo(draft: Obj, today: LocalDate = Clock.today()): String {
     val start = parseISO(draft.s("startDate")) ?: return ""
     var last: LocalDate? = null
-    if (draft.s("kind") == "bank") {
-        val sched = Schedule(start, frequencyOf(draft), draft.num("dueDay").toInt())
+    if (isInstalments(draft)) {
+        val sched = Schedule(start, frequencyOf(draft), if (isPersonInstalments(draft)) 0 else draft.num("dueDay").toInt())
         val n = tenureOf(draft)
         var k = 1
         while (k < 100000 && (n <= 0 || k <= n)) { val d = sched.due(k); if (!d.isBefore(today)) break; last = d; k++ }

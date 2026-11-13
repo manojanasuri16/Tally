@@ -47,6 +47,9 @@ DB = {
                repayBy,                         // optional ISO date, after startDate: "to be returned by" (hand) / "repay or renew by" (gold)
                renewals: [ { id, date, from, to, by, at } ],  // renewLoan history: the repayBy moved from `from` to `to` on `date`
                direction,                       // hand only: absent/"taken" (money I took) | "given" (money I gave); never changed after the loan is made
+               plan,                            // hand only: absent (interest only, or no interest when rate is 0) | "instalments" (fixed instalments, below)
+               received,                        // hand with plan "instalments", optional: the money actually handed over (₹9,500 of ₹10,000)
+               // a hand loan with plan "instalments" also has emi, tenure and frequency (as bank), and rate 0
                pledge,                          // gold only: "gold" (default) | "lic" | "fd" | "land" | "none"
                grams,                           // gold only, and only when pledge is "gold"
                by, at, updatedAt, updatedBy, deleted? } ],
@@ -84,12 +87,19 @@ All figures come from the payments actually logged; nothing is added to what is 
 - **Rate changes** (`rateChanges`, reducing loans only): every instalment due on or after `from` uses the new rate for its interest; with `emi` it also uses the new instalment. Without `emi` the instalment stays and the number left follows. Instalments due before `from` are never recomputed. Two changes on one date are not allowed (`addRateChange` replaces one on the same date).
 - **Pending:** instalments whose date is before today and that are not fully covered (`emisPending`, `amountPending`). The instalments left, the end date, and the amounts of the ones not paid yet are worked forward from what is owed now. An EMI too small to ever clear the loan sets `emiTooLow` (and validation refuses one at or below the first instalment's interest).
 
+### A person's instalment loan (`hand` with `plan: "instalments"`)
+
+- A lender who hands over ₹9,500 for ₹10,000 and collects ₹1,000 every week for 12 weeks. The form asks the amount, what was actually received (optional), how often, each payment and how many.
+- It is worked exactly as a bank loan with no rate whose amount is the instalments' total (`instalmentBasis`): what is owed is what is left of `emi × tenure` (₹12,000), EMI payments cover instalments in order, pending and the due list work as for a bank loan, and a monthly one falls on the start date's day. `loanView` adds `totalToRepay` and `extra` (the total less `received`, or less the amount when `received` is not given). It has no repay-by date and no rate changes.
+- Payments on it are "Instalment" (`emi`) and "Returned some of the amount" (`principal`, lowers what is owed at once).
+
 ### Interest-only loans (`hand` with a rate, `gold`)
 
 - **Periods** end every month or every year after the start date, on the start date's day (clamped).
 - **Reducing** (default): a period's interest is worked on what was owed at its start (part repayments dated on or before that day count), so a part repayment lowers the interest from the next period. **Flat:** every period's interest is on the original amount until the loan is closed.
 - **Interest payments cover periods in order, oldest first;** a partial payment covers part of one. **Pending** (`interestPending`, `periodsPending`): the uncovered part of every period that ended before today, since the start or since the last period fully paid. Interest is counted only for whole periods that ended while something was still owed: when the whole amount is returned mid-period, that last part-period is not worked out (settle it by hand as an interest payment).
-- A loan with `rate: 0` (hand or gold) has no interest: no next due, never pending, never overdue, simply still owed.
+- A loan with `rate: 0` (hand or gold) has no interest: no next due, never pending, never overdue, simply still owed. Its only payment kind is a part repayment, which lowers what is owed.
+- The form asks a person's entry "How is it paid back?": **Interest only** (the default), **No interest**, or **Instalments** (above). With a rate it shows the interest a period works out to ("Interest: ₹1,000 every month (₹2 on every ₹100 a month)").
 - **Repay by** (`repayBy`, hand and gold): from the month it falls in, the remaining amount is a principal row in the due list, overdue once the date has passed while anything is owed. **Renewing** (`renewLoan`) moves the date and keeps a `renewals` entry; it does not touch interest: whatever interest is pending stays pending until it is paid as an interest payment.
 
 ### A loan entered after it started (`paidUpTo`)
