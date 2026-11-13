@@ -162,6 +162,28 @@ internal class LoanCalc(
     val prePaid: Int = 0,
 )
 
+/**
+ * A credit card: payments dated on or after the statement date count against it (one on the statement day itself only if it
+ * was entered after the statement was, `statementAt`). What is owed is the outstanding amount less those; the one due item
+ * is the minimum (or the whole bill when there is no minimum) less those, on `dueDate`, until it is covered.
+ */
+internal fun calcCard(loan: Obj, pays: List<Obj>): LoanCalc {
+    val sd = loan.s("startDate"); val sAt = loan.num("statementAt")
+    var paid = 0.0; var paidTotal = 0.0
+    for (p in pays) {
+        val a = p.num("amount"); paidTotal += a
+        val d = p.s("date").take(10)
+        if (d > sd || (d == sd && p.num("at") > sAt)) paid += a
+    }
+    val outstanding = loan.num("principal")
+    val bal = max(0.0, outstanding - paid)
+    val due = parseISO(loan.s("dueDate"))
+    val need = if (loan.num("minDue") > 0) min(loan.num("minDue"), outstanding) else outstanding
+    val left = max(0.0, need - paid)
+    val slots = if (due != null && left > 0.005) listOf(Slot(due, left, need)) else emptyList()
+    return LoanCalc(bal, paidTotal, min(paid, outstanding), 0.0, slots, paid > 0)
+}
+
 /** The loan's `paidUpTo` date (everything due on or before it was paid as agreed before the loan was entered), or null. */
 fun paidUpToOf(loan: Obj): LocalDate? = parseISO(loan.s("paidUpTo"))
 

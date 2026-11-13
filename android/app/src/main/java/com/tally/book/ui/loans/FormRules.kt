@@ -12,7 +12,7 @@ import java.time.LocalDate
  */
 object LoanFormRules {
     /** A rate is entered (every kind but a hand loan that says No interest): the Reducing / Flat choice goes with it. */
-    fun hasInterest(kind: String, handInterest: String): Boolean = kind != "hand" || handInterest != "none"
+    fun hasInterest(kind: String, handInterest: String): Boolean = kind != "card" && (kind != "hand" || handInterest != "none")
 
     /** "How often do you pay?": bank loans only. */
     fun showFrequency(kind: String): Boolean = kind == "bank"

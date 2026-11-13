@@ -90,3 +90,34 @@ fun RenewSheet(loanId: String, onDismiss: () -> Unit) {
         FormError(error, stamp)
     }
 }
+
+/**
+ * A new credit card statement: the outstanding amount, the minimum due and the pay-by date, as of today. Payments from then on count against the new figures; the old ones are kept with the card.
+ */
+@Composable
+fun StatementSheet(loanId: String, onDismiss: () -> Unit) {
+    val theLoan = remember(loanId) { loan(loanId) }
+    if (theLoan == null) { LaunchedEffect(Unit) { onDismiss() }; return }
+    var outstanding by remember { mutableDoubleStateOf(0.0) }
+    var minDue by remember { mutableDoubleStateOf(0.0) }
+    val on = remember { todayISO() }   // the new figures count from today
+    var due by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var stamp by remember { mutableIntStateOf(0) }
+
+    fun save() {
+        var problem: String? = null
+        Ledger.edit { problem = updateStatement(loanId, outstanding, minDue, due, on) }
+        if (problem != null) { error = problem; stamp++; return }
+        onDismiss()
+    }
+
+    EditSheet(t("card.update", "Update statement"), onDismiss, onSave = { save() }, saveEnabled = due.isNotEmpty()) {
+        Text(loanTitle(theLoan), Modifier.padding(start = 4.dp), style = Apple.type.subheadline, color = Apple.colors.secondaryLabel)
+        MoneyField(outstanding, { outstanding = it; error = null }, t("card.outstanding", "Outstanding (from the statement)"))
+        MoneyField(minDue, { minDue = it; error = null }, t("card.minDue", "Minimum due"),
+            supporting = t("card.minDue.help", "Leave it empty if you pay the full amount every month."))
+        DateField(due, { due = it; error = null }, t("card.dueDate", "Pay by"))
+        FormError(error, stamp)
+    }
+}

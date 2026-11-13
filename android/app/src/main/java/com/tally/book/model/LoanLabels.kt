@@ -9,6 +9,7 @@ fun kindLabel(kind: String?): String = when (kind) {
     "bank" -> t("loan.kind.bank", "Bank / EMI")
     "hand" -> t("loan.kind.hand", "From a person")
     "gold" -> t("loan.kind.secured", "Pledged")
+    "card" -> t("loan.kind.card", "Credit card")
     else -> t("loan.kind.other", "Entry")
 }
 
@@ -54,6 +55,7 @@ fun payKindLabel(kind: String?, loanKind: String? = null, given: Boolean = false
     kind == "interest" -> t("pay.kind.interest", "Interest")
     kind == "principal" && given -> t("pay.kind.principal.given", "Got some of the amount back")
     kind == "principal" && loanKind == "hand" -> t("pay.kind.principal.hand", "Returned some of the amount")
+    kind == "principal" && loanKind == "card" -> t("pay.kind.card", "Card payment")
     kind == "principal" -> t("pay.kind.principal", "Principal")
     else -> t("pay.kind.other", "Payment")
 }
@@ -108,7 +110,8 @@ fun instalmentsInWords(count: Int, frequency: String?): String = when (frequency
  * interest-only loans "Interest pending: ₹3,000 (3 months)" (or years), bank loans "Instalments pending: ₹17,770 (2)".
  */
 fun pendingInWords(loan: Obj, amountText: String, count: Int): String =
-    if (isInstalments(loan)) t("loan.pending.emi", "Instalments pending: {amount} ({count})", "amount" to amountText, "count" to count)
+    if (isCard(loan)) t("loan.pending.card", "Card payment overdue: {amount}", "amount" to amountText)
+    else if (isInstalments(loan)) t("loan.pending.emi", "Instalments pending: {amount} ({count})", "amount" to amountText, "count" to count)
     else {
         val periods = when (interestEvery(loan)) {
             "year" -> tp("loan.count.year", count, "{n} year", "{n} years")

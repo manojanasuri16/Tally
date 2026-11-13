@@ -258,6 +258,22 @@ fun removeRateChange(loanId: String, changeId: String): Boolean {
  * ({ id, date, from, to, by, at }) and `repayBy` moves, so the principal item leaves the due list. Interest is not touched: whatever
  * interest is pending stays pending (pay it as an interest payment). Returns the problem in plain words, or null when it was saved.
  */
+/**
+ * A new credit card statement: the outstanding amount, the minimum due and the pay-by date replace the card's, dated [date]
+ * (payments from then on count against the new figures). The old figures are kept in `statements`, newest last.
+ */
+fun updateStatement(id: String, outstanding: Double, minDue: Double, dueDate: String, date: String): String? {
+    val l = loan(id) ?: return t("pay.err.loan", "This entry could not be found.")
+    val draft = obj("principal" to outstanding, "minDue" to minDue, "dueDate" to dueDate.take(10), "startDate" to date.take(10))
+    validateCard(draft)?.let { return it }
+    l.aa("statements").add(obj("date" to l.s("startDate"), "outstanding" to l.num("principal"), "minDue" to l.num("minDue"),
+        "dueDate" to l.s("dueDate"), "by" to myId(), "at" to Clock.millis().toDouble()))
+    l["principal"] = outstanding; l["minDue"] = minDue; l["dueDate"] = dueDate.take(10); l["startDate"] = date.take(10)
+    l["statementAt"] = Clock.millis().toDouble()
+    touch(l)
+    return null
+}
+
 fun renewLoan(id: String, newRepayBy: String, date: String): String? {
     val l = loan(id) ?: return t("pay.err.loan", "This entry could not be found.")
     validateRenewal(l, newRepayBy, date)?.let { return it }

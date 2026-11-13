@@ -86,7 +86,7 @@ fun PaymentSheet(loanId: String, existing: Obj?, sms: String? = null, startKind:
         storeAll("payment", id, pending.toList())
         val after = loan(loanId)?.let { loanView(it).num("owed") } ?: before
         onDismiss()
-        if (!theLoan.b("closed") && reachedZero(before, after)) offerClose(loanId, words.closeAsk)
+        if (!theLoan.b("closed") && !isCard(theLoan) && reachedZero(before, after)) offerClose(loanId, words.closeAsk)
     }
 
     val scope = rememberCoroutineScope()

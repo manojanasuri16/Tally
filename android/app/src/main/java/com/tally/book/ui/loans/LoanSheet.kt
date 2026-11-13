@@ -69,6 +69,9 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
     val saved = remember { existing?.let { filesOf("loan", it.s("id")) } ?: emptyList() }
     var showDetails by remember { mutableStateOf(editing && (existing?.s("note").orEmpty().isNotBlank() || existing?.s("repayBy").orEmpty().isNotBlank() || saved.isNotEmpty())) }
     var every by remember { mutableStateOf(existing?.s("interestEvery")?.takeIf { it in INTEREST_EVERY }) }
+    // a credit card: the statement's minimum due and pay-by date
+    var minDue by remember { mutableDoubleStateOf(existing?.num("minDue") ?: 0.0) }
+    var cardDue by remember { mutableStateOf(existing?.s("dueDate").orEmpty()) }
     var grams by remember { mutableStateOf(existing?.let { editText(it.num("grams")) }.orEmpty()) }
     var note by remember { mutableStateOf(existing?.s("note").orEmpty()) }
     var keepPrivate by remember { mutableStateOf(existing?.b("private") ?: false) }
@@ -122,6 +125,10 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
             d["frequency"] = frequency
             if (received > 0) d["received"] = received else d.remove("received")
             listOf("rateUnit", "interestEvery", "dueDay", "repayBy").forEach { d.remove(it) }
+        } else if (kind == "card") {
+            d["minDue"] = minDue
+            d["dueDate"] = cardDue
+            listOf("rateUnit", "interestEvery", "interestMethod", "repayBy", "emi", "tenure", "frequency", "dueDay").forEach { d.remove(it) }
         } else {
             if (kind == "hand") listOf("plan", "emi", "tenure", "frequency", "received").forEach { d.remove(it) }
             d["rateUnit"] = if (kind == "hand") (if (interest == "month") "month" else "year") else rateUnit
@@ -173,7 +180,7 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
     ) {
         if (!editing) {
             FieldTitle(t("loan.which", "What kind of entry is it?"))
-            listOf("bank", "hand", "gold", "given").forEach { k ->
+            listOf("bank", "hand", "gold", "card", "given").forEach { k ->
                 val isKind = if (k == "given") kind == "hand" && given else if (k == "hand") kind == "hand" && !given else kind == k
                 KindChoice(kindIcon(k), choiceTitle(k), choiceHelp(k), selected = isKind) {
                     kind = if (k == "given") "hand" else k; given = k == "given"; error = null
@@ -196,23 +203,30 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
             TextInput(name, { name = it; error = null }, t("loan.name", "Name"), placeholder = when (kind) {
                 "gold" -> pledgeNameExample(pledge)
                 "hand" -> if (given) t("loan.name.eg.given", "e.g. Money for a friend") else t("loan.name.eg.hand", "e.g. From a friend")
+                "card" -> t("card.name.eg", "e.g. SBI card")
                 else -> t("loan.name.eg", "e.g. Home EMI")
             })
             TextInput(
                 lender, { lender = it },
-                if (kind == "bank") t("loan.lender.bank", "Bank") else words.who,
-                placeholder = when (kind) { "bank" -> t("loan.lender.bank.eg", "e.g. State Bank"); "gold" -> pledgeLenderExample(pledge); else -> words.whoEg },
+                if (kind == "bank" || kind == "card") t("loan.lender.bank", "Bank") else words.who,
+                placeholder = when (kind) { "bank", "card" -> t("loan.lender.bank.eg", "e.g. State Bank"); "gold" -> pledgeLenderExample(pledge); else -> words.whoEg },
             )
             MoneyField(
-                principal, { principal = it; error = null }, words.amount,
-                supporting = if (LoanFormRules.showAmountHint(kind, paidShown)) t("loan.amount.stillOwed", "If part of the amount was already returned, enter what is still owed.") else null,
+                principal, { principal = it; error = null }, if (kind == "card") t("card.outstanding", "Outstanding (from the statement)") else words.amount,
+                supporting = if (kind != "card" && LoanFormRules.showAmountHint(kind, paidShown)) t("loan.amount.stillOwed", "If part of the amount was already returned, enter what is still owed.") else null,
             )
-            DateField(startDate, {
+            // a card is kept simple: its figures are as of the day they are entered, so no date is asked
+            if (kind != "card") DateField(startDate, {
                 startDate = it
                 if (kind == "bank" && !dueDayTouched) parseISO(it)?.let { d -> dueDay = d.dayOfMonth.toString() }
                 // a first payment date on or before the new date taken no longer fits: go back to the usual one
                 if (firstDueTouched) { val f = parseISO(firstDue); val s = parseISO(it); if (f != null && s != null && !f.isAfter(s)) firstDueTouched = false }
             }, words.date)
+            if (kind == "card") {
+                MoneyField(minDue, { minDue = it; error = null }, t("card.minDue", "Minimum due"),
+                    supporting = t("card.minDue.help", "Leave it empty if you pay the full amount every month."))
+                DateField(cardDue, { cardDue = it; error = null }, t("card.dueDate", "Pay by"))
+            }
 
             if (kind == "hand") {
                 FieldTitle(if (given) t("loan.plan.given", "How will it come back?") else t("loan.plan", "How is it paid back?"))
@@ -331,6 +345,7 @@ private fun choiceTitle(k: String): String = when (k) {
     "bank" -> t("loan.kind.bank", "Bank / EMI")
     "hand" -> t("loan.choice.hand", "Money I took from a person")
     "gold" -> kindLabel("gold")
+    "card" -> kindLabel("card")
     else -> t("loan.choice.given", "Money I gave")
 }
 
@@ -338,6 +353,7 @@ private fun choiceHelp(k: String): String = when (k) {
     "bank" -> t("loan.kind.bank.help", "A home, car, personal or group loan with a monthly EMI")
     "hand" -> loanWords(false).kindHelp
     "gold" -> t("loan.kind.secured.help", "Gold, LIC policy, FD, land papers, something else")
+    "card" -> t("loan.kind.card.help", "The outstanding amount, minimum due and pay-by date from each statement")
     else -> loanWords(true).kindHelp
 }
 

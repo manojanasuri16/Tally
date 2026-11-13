@@ -6,6 +6,7 @@ import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountBalance
+import androidx.compose.material.icons.rounded.CreditCard
 import androidx.compose.material.icons.rounded.Diamond
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Redeem
@@ -29,6 +30,7 @@ fun kindIcon(kind: String): ImageVector = when (kind) {
     "bank" -> Icons.Rounded.AccountBalance
     "hand" -> Icons.Rounded.Person
     "given" -> Icons.Rounded.Redeem
+    "card" -> Icons.Rounded.CreditCard
     else -> Icons.Rounded.Diamond
 }
 

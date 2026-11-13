@@ -11,7 +11,14 @@ import kotlin.math.max
  * Interest or instalments that fell due and were not paid are shown separately as "pending", never added to what is owed.
  */
 
-val LOAN_KINDS = listOf("bank", "hand", "gold")
+val LOAN_KINDS = listOf("bank", "hand", "gold", "card")
+
+/**
+ * A credit card: its statement says what is outstanding (`principal`, as of `startDate`, the statement date), the minimum to
+ * pay (`minDue`, 0 = the whole bill) and by when (`dueDate`). Payments made since the statement lower both. No interest is
+ * worked out here: the next statement brings the bank's own figures ("Update statement").
+ */
+fun isCard(loan: Obj): Boolean = loan.s("kind") == "card"
 val PAY_KINDS = listOf("emi", "interest", "principal")
 
 /** Money I gave to someone: only a `hand` loan can be given (direction "given"); everything else is money I took. */
@@ -32,7 +39,8 @@ fun loanView(loan: Obj, today: LocalDate = Clock.today()): Obj =
 internal fun calcOf(loan: Obj, payments: List<Obj>, today: LocalDate): LoanCalc? {
     val start = parseISO(loan.s("startDate")) ?: return null
     val pays = sortedLive(payments, loan.s("id"))
-    return if (isInstalments(loan)) calcInstalments(instalmentBasis(loan), pays, start, today)
+    return if (isCard(loan)) calcCard(loan, pays)
+    else if (isInstalments(loan)) calcInstalments(instalmentBasis(loan), pays, start, today)
     else calcInterestOnly(loan, pays, start, today, isNoInterest(loan))
 }
 
@@ -126,6 +134,10 @@ fun loanView(loan: Obj, payments: List<Obj>, today: LocalDate): Obj {
         val rn = loan.objs("renewals").filter { parseISO(it.s("date")) != null }
         v["renewals"] = rn.size.toDouble(); v["lastRenewal"] = rn.maxOfOrNull { it.s("date") } ?: ""
     }
+    if (isCard(loan)) {
+        v["minDue"] = loan.num("minDue"); v["dueDate"] = loan.s("dueDate"); v["statementDate"] = loan.s("startDate")
+        v["paidSinceStatement"] = c?.paidPrincipal ?: 0.0
+    }
     if (kind == "gold") {
         v["pledge"] = pledgeOf(loan); v["pledgeText"] = pledgeTextOf(loan)
         v["grams"] = if (pledgeOf(loan) == "gold") loan.num("grams") else 0.0
@@ -154,7 +166,7 @@ fun dueList(today: LocalDate = Clock.today(), sharedOnly: Boolean = false, only:
         if (v.num("monthDueCount") > 0) {
             val pend = v.num("pendingAmount")
             rows.add(obj("loan" to l, "date" to v.s("nextDueDate"), "amount" to v.num("monthDue"), "overdue" to v.b("overdue"),
-                "given" to given, "kind" to if (isInstalments(l)) "emi" else "interest",
+                "given" to given, "kind" to if (isCard(l)) "card" else if (isInstalments(l)) "emi" else "interest",
                 "pending" to pend, "pendingCount" to v.num("pendingCount"), "upcoming" to v.num("monthDue") - pend, "count" to v.num("monthDueCount")))
         }
         if (v.b("repayDue"))
@@ -205,6 +217,7 @@ fun reachedZero(owedBefore: Double, owedAfter: Double): Boolean = owedBefore > 0
  * A no-interest loan has nothing to suggest but a part repayment, with amount 0 (the person types what was returned).
  */
 fun suggestPayment(loan: Obj, today: LocalDate = Clock.today()): Obj {
+    if (isCard(loan)) return obj("kind" to "principal", "amount" to loanView(loan, today).num("nextDueAmount"))
     if (isNoInterest(loan)) return obj("kind" to "principal", "amount" to 0.0)
     val v = loanView(loan, today)
     if (isInstalments(loan)) return obj("kind" to "emi", "amount" to v.num("nextDueAmount"))
@@ -219,6 +232,7 @@ fun validateLoan(draft: Obj): String? {
     val kind = draft.s("kind")
     if (draft.s("name").isBlank()) return t("loan.err.name", "Please give this entry a name.")
     if (kind !in LOAN_KINDS) return t("loan.err.kind", "Please choose what kind of entry this is.")
+    if (kind == "card") return validateCard(draft)
     if (draft.num("principal") <= 0) return t("loan.err.principal", "Please enter the amount.")
     if (draft.num("rate") < 0) return t("loan.err.rate", "The interest rate cannot be below zero.")
     val start = parseISO(draft.s("startDate")) ?: return t("loan.err.date", "Please enter the date the entry started.")
@@ -308,6 +322,16 @@ fun validateRenewal(loan: Obj, newRepayBy: String, date: String): String? {
     val start = parseISO(loan.s("startDate"))
     if (start != null && !by.isAfter(start)) return t("loan.err.repayBy.early", "The date to repay by must be after the entry started.")
     return null
+}
+
+/** The checks for a credit card or a new statement: an outstanding amount (0 is fine: paid in full), a minimum within it, a pay-by date. */
+fun validateCard(draft: Obj): String? {
+    if (draft.num("principal") < 0) return t("card.err.outstanding", "The outstanding amount cannot be below zero.")
+    if (draft.num("minDue") < 0) return t("card.err.min", "The minimum due cannot be below zero.")
+    if (draft.num("minDue") > draft.num("principal")) return t("card.err.minMore", "The minimum due cannot be more than the outstanding amount.")
+    parseISO(draft.s("startDate")) ?: return t("card.err.statement", "Please enter the statement date.")
+    parseISO(draft.s("dueDate")) ?: return t("card.err.due", "Please enter the date to pay by.")
+    return null   // a pay-by date already past is fine: the bill is simply overdue
 }
 
 /** The first problem with a payment form, in plain words, or null. */

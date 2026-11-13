@@ -107,6 +107,7 @@ fun payKindsFor(loanKind: String): List<String> =
  */
 fun payKindOptions(loan: Obj, keep: String?): List<String> {
     val base = when {
+        com.tally.book.model.isCard(loan) -> listOf("principal")
         com.tally.book.model.isInstalments(loan) -> listOf("emi", "principal")
         com.tally.book.model.isNoInterest(loan) -> listOf("principal")
         else -> payKindsFor(loan.s("kind"))
@@ -139,6 +140,7 @@ fun splitPrivate(open: List<Obj>, owed: Map<String, Double>): Pair<List<Obj>, Pr
  * (through amtText, so the eye hides it). Null when there is nothing to add.
  */
 fun dueRowNote(loan: Obj, pending: Double, count: Int, pendingText: String): String? {
+    if (com.tally.book.model.isCard(loan)) return null   // one minimum due: the Overdue mark already says it
     val parts = ArrayList<String>(2)
     if (count > 1 && com.tally.book.model.isInstalments(loan) && com.tally.book.model.frequencyOf(loan) != "month")
         parts.add(tp("home.payments", count, "{n} payment", "{n} payments"))

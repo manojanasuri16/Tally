@@ -78,6 +78,7 @@ private fun LoanBody(id: String, d: Detail) {
     var payingPending by remember { mutableStateOf(false) }
     var changingRate by remember { mutableStateOf(false) }
     var renewing by remember { mutableStateOf(false) }
+    var updatingStatement by remember { mutableStateOf(false) }
     val pickers = rememberAttachPickers { p -> storeAll("loan", id, listOf(p)) }
 
     fun closeIt() {
@@ -145,6 +146,7 @@ private fun LoanBody(id: String, d: Detail) {
 
             AGroup {
                 if (!closed && kind == "bank" && interestMethod(loan) == "reducing") item { ButtonRow(t("loan.rateChange.title", "Rate changed")) { changingRate = true } }
+                if (!closed && isCard(loan)) item { ButtonRow(t("card.update", "Update statement")) { updatingStatement = true } }
                 if (!closed && hasRepayBy(kind) && v.s("repayBy").isNotEmpty()) item { ButtonRow(t("loan.renew.title", "Renewed")) { renewing = true } }
                 item { ButtonRow(t("loan.edit", "Edit entry")) { editingLoan = true } }
                 if (closed) item { ButtonRow(t("loan.reopen", "Open this entry again")) { Ledger.edit { reopenLoan(id) } } }
@@ -158,6 +160,7 @@ private fun LoanBody(id: String, d: Detail) {
     if (payingPending) PaymentSheet(id, null, startAmount = v.num("pendingAmount"), onDismiss = { payingPending = false })
     if (changingRate) RateChangeSheet(id, onDismiss = { changingRate = false })
     if (renewing) RenewSheet(id, onDismiss = { renewing = false })
+    if (updatingStatement) StatementSheet(id, onDismiss = { updatingStatement = false })
     editingPayment?.let { p -> PaymentSheet(id, p, onDismiss = { editingPayment = null }) }
     if (editingLoan) LoanSheet(loan, onDismiss = { editingLoan = false }, onSaved = { editingLoan = false })
 }
@@ -169,7 +172,7 @@ private fun NextDue(loan: Obj, v: Obj) {
     val s = LocalSemantic.current
     val owed = v.num("owed")
     if (owed <= 0) {
-        AGroup { item { NoteRow(t("loan.paidOff", "Everything is paid. You can close this entry below.")) } }
+        AGroup { item { NoteRow(if (isCard(loan)) t("card.paidOff", "Nothing to pay on this card until the next statement.") else t("loan.paidOff", "Everything is paid. You can close this entry below.")) } }
         return
     }
     val date = v.s("nextDueDate")
@@ -227,7 +230,12 @@ private fun PendingRow(loan: Obj, v: Obj, onPay: () -> Unit) {
 private fun Facts(loan: Obj, v: Obj) {
     val kind = loan.s("kind")
     AGroup(title = t("loan.details", "Details")) {
-        item { ARow(loanWords(loan).amount, money = loan.num("principal"), moneyColor = Apple.colors.label) }
+        item { ARow(if (isCard(loan)) t("card.outstanding.row", "Outstanding on the statement") else loanWords(loan).amount, money = loan.num("principal"), moneyColor = Apple.colors.label) }
+        if (isCard(loan)) {
+            item { ARow(t("card.minDue", "Minimum due"), money = loan.num("minDue"), moneyColor = Apple.colors.label) }
+            item { ARow(t("card.dueDate", "Pay by"), value = fmtISODate(loan.s("dueDate")).ifEmpty { "—" }) }
+            if (v.num("paidSinceStatement") > 0) item { ARow(t("card.paidSince", "Paid since the statement"), money = v.num("paidSinceStatement"), moneyColor = Apple.colors.label) }
+        }
         if (isPersonInstalments(loan)) {
             val given = isGiven(loan)
             if (loan.num("received") > 0) item {
@@ -238,7 +246,8 @@ private fun Facts(loan: Obj, v: Obj) {
                 ARow(if (given) t("loan.extra.given", "Extra you get") else t("loan.extra", "Extra you pay"), money = v.num("extra"), moneyColor = Apple.colors.label)
             }
         }
-        if (isInstalments(loan)) {
+        if (isCard(loan)) Unit
+        else if (isInstalments(loan)) {
             val freq = v.s("frequency").ifEmpty { frequencyOf(loan) }
             item { ARow(if (freq == "month") t("loan.emi.short", "EMI") else t("loan.emi.each.short", "Each payment"), money = v.num("emi"), moneyColor = Apple.colors.label) }
             if (kind == "bank") item { ARow(t("loan.rate", "Interest rate"), value = rateWithMethodInWords(v.num("currentRate"), "year", v.s("interestMethod"))) }
@@ -266,7 +275,7 @@ private fun Facts(loan: Obj, v: Obj) {
                 )
             }
         }
-        item { ARow(if (isGiven(loan)) t("loan.given", "Given on") else t("loan.taken", "Taken on"), value = fmtISODate(loan.s("startDate")).ifEmpty { "—" }) }
+        item { ARow(if (isCard(loan)) t("card.statementDate", "Statement date") else if (isGiven(loan)) t("loan.given", "Given on") else t("loan.taken", "Taken on"), value = fmtISODate(loan.s("startDate")).ifEmpty { "—" }) }
         if (bookHasOthers()) item { ARow(t("loan.owner.row", "Whose entry"), value = memberName(ownerOf(loan))) }
         if (v.s("paidUpTo").isNotEmpty()) item { ARow(t("loan.paidUpTo.row", "Paid up to"), value = fmtISODate(v.s("paidUpTo"))) }
         if (loan.b("private")) item {

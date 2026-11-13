@@ -26,7 +26,7 @@ fun remindersFor(today: LocalDate = Clock.today(), horizonDays: Int = 0): Obj {
     for (l in loans().filter { !it.b("closed") }) {
         val c = calcOf(l, paymentsOf(l.s("id")), today) ?: continue
         val given = isGiven(l)
-        val kind = if (isInstalments(l)) "emi" else "interest"
+        val kind = if (isCard(l)) "card" else if (isInstalments(l)) "emi" else "interest"
         fun item(k: String, date: LocalDate, amount: Double, count: Int, state: String) = obj(
             "loanId" to l.s("id"), "kind" to k, "date" to date.toString(), "amount" to amount, "count" to count.toDouble(),
             "given" to given, "state" to state, "days" to daysBetween(today, date).toDouble())
