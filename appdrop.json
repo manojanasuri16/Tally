@@ -12,10 +12,10 @@
   "descriptionFile": "appdrop/description.md",
   "screenshots": [
     "appdrop/screenshots/01-home.png",
-    "appdrop/screenshots/02-entry.png",
-    "appdrop/screenshots/03-payment.png",
-    "appdrop/screenshots/04-add.png",
-    "appdrop/screenshots/05-family.png",
+    "appdrop/screenshots/02-lists.png",
+    "appdrop/screenshots/03-card.png",
+    "appdrop/screenshots/04-person.png",
+    "appdrop/screenshots/05-add.png",
     "appdrop/screenshots/06-telugu.png"
   ]
 }
