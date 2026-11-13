@@ -254,7 +254,11 @@ private fun Facts(loan: Obj, v: Obj) {
         } else {
             if (v.b("noInterest")) item { ARow(t("loan.interest", "Interest"), value = t("loan.noInterest.choice", "No interest")) }
             else {
-                item { ARow(t("loan.rate", "Interest rate"), value = rateWithMethodInWords(loan.num("rate"), loan.s("rateUnit"), v.s("interestMethod"))) }
+                item {
+                    /* interest-only: always on what is still owed, so just the rate; an old flat entry still says so */
+                    val r = if (v.s("interestMethod") == "flat") rateWithMethodInWords(loan.num("rate"), loan.s("rateUnit"), "flat") else rateInWords(loan.num("rate"), loan.s("rateUnit"))
+                    ARow(t("loan.rate", "Interest rate"), value = r)
+                }
                 item { ARow(t("loan.interestPaid", "Interest is paid"), value = everyInWords(v.s("interestEvery").ifEmpty { interestEvery(loan) }).lowercase()) }
             }
             if (kind == "gold") item { ARow(t("loan.pledged", "Pledged"), value = pledgeLabel(v.s("pledge"), v.s("pledgeText"))) }

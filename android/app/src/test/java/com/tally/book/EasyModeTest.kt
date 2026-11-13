@@ -113,7 +113,9 @@ class EasyModeTest {
     private val none = EasyForm.NONE
 
     @Test fun standardModeShowsEverythingAsBefore() {
-        assertTrue(EasyForm.showMethod(false, true, none)); assertFalse(EasyForm.showMethod(false, false, none))
+        assertTrue(EasyForm.showMethod(false, "bank", true, none)); assertFalse(EasyForm.showMethod(false, "bank", false, none))
+        // interest-only entries never ask Reducing/Flat: interest is on what is still owed
+        assertFalse(EasyForm.showMethod(false, "hand", true, none)); assertFalse(EasyForm.showMethod(false, "gold", true, none))
         assertTrue(EasyForm.showFrequency(false, "bank", none)); assertFalse(EasyForm.showFrequency(false, "gold", none))
         assertTrue(EasyForm.showDueDay(false, "bank", "month", none)); assertFalse(EasyForm.showDueDay(false, "bank", "week", none))
         assertTrue(EasyForm.showEvery(false, "hand", true, none)); assertFalse(EasyForm.showEvery(false, "bank", true, none))
@@ -123,7 +125,7 @@ class EasyModeTest {
 
     @Test fun easyModeHidesTheAdvancedFieldsOfANewLoanOfEveryKind() {
         for (kind in listOf("bank", "hand", "gold")) {
-            assertFalse(kind, EasyForm.showMethod(true, true, none))
+            assertFalse(kind, EasyForm.showMethod(true, kind, true, none))
             assertFalse(kind, EasyForm.showFrequency(true, kind, none))
             assertFalse(kind, EasyForm.showDueDay(true, kind, "month", none))
             assertFalse(kind, EasyForm.showEvery(true, kind, true, none))
@@ -136,7 +138,7 @@ class EasyModeTest {
         assertTrue(LoanFormRules.hasInterest("bank", "month")); assertFalse(LoanFormRules.hasInterest("hand", "none"))
         assertTrue(LoanFormRules.showGrams("gold", "gold")); assertFalse(LoanFormRules.showGrams("gold", "land"))
         assertTrue(LoanFormRules.repayByInMain("gold", "gold")); assertFalse(LoanFormRules.repayByInMain("hand", "gold"))
-        assertFalse(EasyForm.showMethod(true, false, none))   // no interest: no method either way
+        assertFalse(EasyForm.showMethod(true, "bank", false, none))   // no interest: no method either way
     }
 
     @Test fun anOldStartDateStillGetsItsSuggestionWithOneQuietLine() {
@@ -160,8 +162,11 @@ class EasyModeTest {
     @Test fun aFlatLoanKeepsItsMethodVisible() {
         val x = EasyForm.extrasOf(loan("kind" to "bank", "interestMethod" to "flat", "startDate" to "2026-03-15", "dueDay" to 15.0))
         assertTrue(x.method)
-        assertTrue(EasyForm.showMethod(true, true, x))
+        assertTrue(EasyForm.showMethod(true, "bank", true, x))
         assertFalse(EasyForm.showFrequency(true, "bank", x))
+        // an old flat entry from a person keeps the choice, so it can be set back
+        val h = EasyForm.extrasOf(loan("kind" to "hand", "interestMethod" to "flat", "startDate" to "2026-03-15"))
+        assertTrue(EasyForm.showMethod(false, "hand", true, h))
     }
 
     @Test fun aWeeklyLoanKeepsItsFrequencyVisible() {

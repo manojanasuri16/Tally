@@ -449,17 +449,25 @@ fun EditSheet(
     val screen = with(density) { androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp.toPx() }
     val restAt = remember { mutableFloatStateOf(Float.NaN) }   // the sheet's offset when it sits fully open
     val holder = remember { arrayOfNulls<SheetState>(1) }
-    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { target ->
-        if (target != SheetValue.Hidden || closing.value) true
-        else if (easy) false
-        else if (!form) true
-        else {
-            val st = holder[0]; val rest = restAt.floatValue
-            val now = st?.let { runCatching { it.requireOffset() }.getOrNull() }
-            if (now == null || rest.isNaN()) false
-            else (now - rest) >= maxOf(minPull, (screen - rest) / 3f)
+    // The sheet's state is remembered against this lambda: a new lambda on every recomposition made a new state, and the sheet
+    // played its opening animation again (picking any option in a form dropped the sheet and raised it). Remember it once and
+    // read the current values through State.
+    val easyNow = rememberUpdatedState(easy); val formNow = rememberUpdatedState(form)
+    val pullNow = rememberUpdatedState(minPull); val screenNow = rememberUpdatedState(screen)
+    val confirm: (SheetValue) -> Boolean = remember {
+        { target ->
+            if (target != SheetValue.Hidden || closing.value) true
+            else if (easyNow.value) false
+            else if (!formNow.value) true
+            else {
+                val st = holder[0]; val rest = restAt.floatValue
+                val now = st?.let { runCatching { it.requireOffset() }.getOrNull() }
+                if (now == null || rest.isNaN()) false
+                else (now - rest) >= maxOf(pullNow.value, (screenNow.value - rest) / 3f)
+            }
         }
-    })
+    }
+    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = confirm)
     holder[0] = state
     LaunchedEffect(state) {
         snapshotFlow { state.currentValue to state.targetValue }.collect { (cur, tgt) ->

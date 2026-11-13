@@ -92,7 +92,7 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
         d["principal"] = principal
         d["startDate"] = startDate
         d["rate"] = if (!hasInterest) 0.0 else n(rate)
-        if (hasInterest) d["interestMethod"] = method else d.remove("interestMethod")
+        if (hasInterest && (kind == "bank" || method == "flat")) d["interestMethod"] = method else d.remove("interestMethod")
         d["note"] = note.trim()
         d["private"] = keepPrivate
         if (kind == "bank") {
@@ -220,7 +220,7 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
                     keyboard = KeyboardType.Decimal, placeholder = if (kind == "hand" && perMonth) "2" else "0",
                 )
                 if (kind != "bank") interestHint(core())?.let { Hint(it) }
-                if (EasyForm.showMethod(easy, hasInterest, extras)) {
+                if (EasyForm.showMethod(easy, kind, hasInterest, extras)) {
                     SegmentedControl(
                         listOf("reducing" to t("loan.method.choice.reducing", "Reducing"), "flat" to t("loan.method.choice.flat", "Flat")),
                         method, { method = it; error = null },
