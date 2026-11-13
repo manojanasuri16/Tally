@@ -211,7 +211,12 @@ private fun HomeHero(home: Home) {
 @Composable
 private fun DueSection(due: List<Obj>, onPay: (String, String?) -> Unit, onOpen: (String) -> Unit, given: Boolean = false) {
     val w = loanWords(given)
-    AGroup(title = w.expected) {
+    // the month's total beside the heading: everything listed, pending amounts included (each row's figure already includes them)
+    val total = due.sumOf { it.num("amount") }
+    AGroup(
+        title = w.expected,
+        trailingHead = if (due.isEmpty()) null else ({ Money(total, style = Apple.type.subheadline, fontWeight = FontWeight.SemiBold, color = Apple.colors.label) }),
+    ) {
         if (due.isEmpty()) item { NoteRow(if (given) t("home.nothingExpected", "Nothing expected this month") else t("home.nothingDue", "Nothing due this month")) }
         else due.forEach { d ->
             val loan = d.o("loan")!!
