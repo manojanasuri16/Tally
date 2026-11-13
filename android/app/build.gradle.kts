@@ -16,8 +16,8 @@ android {
         applicationId = "com.tally.book"
         minSdk = 29
         targetSdk = 36
-        versionCode = 15
-        versionName = "0.8.2"
+        versionCode = 16
+        versionName = "0.9.0"
         // The relay (Supabase) project, from ~/.gradle/gradle.properties or -P; empty means sync is off.
         buildConfigField("String", "SUPABASE_URL", "\"${providers.gradleProperty("TALLY_SUPABASE_URL").orElse("").get()}\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"${providers.gradleProperty("TALLY_SUPABASE_ANON_KEY").orElse("").get()}\"")
