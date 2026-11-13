@@ -190,7 +190,7 @@ Independent review of `/home/manoja/Tally` at commit `72e8858` (Tally 0.5.0, ver
   - The restore is staged behind a journal, and a restore never removes a lock.
 - **Network:** HTTPS only. There is no network-security config, and targetSdk 36 refuses cleartext and user CAs; the `http://` URL redirects. There are 15 s and 60 s timeouts. Only the relay is contacted: no Firebase, analytics or Play Services.
 - **APK:** the release build has R8 and resource shrinking on, is not debuggable, has `allowBackup=false`, and contains only the URL and publishable key; no service, secret or JWT key was found in the dex.
-- **Workflow:** `permissions: {}`. It uses only the publishable key from secrets and prints only the HTTP status, the ping body and relay-wide totals. The repo is private.
+- **Workflow:** `permissions: {}`. It uses only the publishable key from secrets and prints only the HTTP status, the ping body and relay-wide totals. The repo was private at the time of this review; it is public since 2026-11-13. Nothing secret is in it or its history (checked then: no keys, passwords or tokens; the relay address and publishable key are Gradle properties and repository secrets, and the workflow runs only on a schedule or by hand, so pull requests from forks never see them).
 
 ## Fixes (on the device)
 
