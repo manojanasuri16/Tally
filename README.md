@@ -52,4 +52,6 @@ appdrop/     the store listing: description, icon, screenshots
 scripts/     release.sh
 ```
 
-© Manoj Anasuri. All rights reserved: the source is public to read and review; it is not licensed for reuse.
+## License
+
+Open source under the [MIT License](LICENSE). Contributions and issues are welcome.

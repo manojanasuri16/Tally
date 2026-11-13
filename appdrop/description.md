@@ -17,4 +17,4 @@ No account, no ads, no tracking. Mark any entry private and it never leaves your
 
 **Why no account?** Tally has no sign-up, email or password. Your family's book is end-to-end encrypted, so even the server can't read it, and nobody can take over your account, because there isn't one. Moving to a new phone? A family member lets you back in, and your backup brings back anything you kept private.
 
-The source is public on GitHub: https://github.com/manojanasuri16/Tally
+Open source (MIT): https://github.com/manojanasuri16/Tally

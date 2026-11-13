@@ -60,7 +60,7 @@ Independent review of `/home/manoja/Tally` at commit `72e8858` (Tally 0.5.0, ver
 
 ### M2. Joining a family silently uploads the joiner's whole existing book, and invite names are not authenticated (verified)
 - **Where:** `Membership.enter` calls `SyncModel.markAllDirty` and queues every live file (`blobsUp`). The confirmation in `FamilyScreen` shows the family and inviter names that come from the invite itself, which are attacker-controlled. The `tally://join` link is `BROWSABLE`, so any web page or chat link can bring up that confirmation.
-- **Attack:** a stranger makes their own family and sends a link whose family name is "Example family" and whose inviter is "Amma". A parent who is not yet in a family taps Join; the attacker approves. Every non-private loan, payment and document already on that phone is pushed to the attacker's family, and so is everything entered later.
+- **Attack:** a stranger makes their own family and sends a link whose family name copies the victim's own family name and whose inviter is "Amma". A parent who is not yet in a family taps Join; the attacker approves. Every non-private loan, payment and document already on that phone is pushed to the attacker's family, and so is everything entered later.
 - **Fix:**
   - When a phone enters a family and already holds entries, ask "Share your N existing entries with <family>?" (or make them private by default) before calling `markAllDirty`.
   - After approval, show who is in the family before anything is pushed.
