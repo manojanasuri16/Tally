@@ -91,7 +91,7 @@ fun nextPaymentFor(today: LocalDate = Clock.today(), days: Int = 60): NextPaymen
     var overdue = 0
     for (l in loans().filter { !it.b("closed") && !isGiven(it) }) {
         val c = calcOf(l, paymentsOf(l.s("id")), until) ?: continue
-        val name = l.s("name").trim().ifEmpty { l.s("lender").trim() }
+        val name = loanTitle(l)
         val by = if (hasRepayBy(l.s("kind"))) parseISO(l.s("repayBy")) else null
         val late = c.slots.filter { it.due.isBefore(today) }
         val principalLate = by != null && c.balance > 0 && by.isBefore(today)

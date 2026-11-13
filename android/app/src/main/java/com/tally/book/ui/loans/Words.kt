@@ -126,7 +126,7 @@ class PrivateLoans(val loans: List<Obj>, val toPay: Double, val toComeBack: Doub
 /** Splits the open loans: the private ones (taken and given, by name) for their own group, the rest for the kind groups. Closed loans are not touched here. */
 fun splitPrivate(open: List<Obj>, owed: Map<String, Double>): Pair<List<Obj>, PrivateLoans> {
     val (priv, shared) = open.partition { it.b("private") }
-    val sorted = priv.sortedBy { it.s("name").lowercase() }
+    val sorted = priv.sortedBy { com.tally.book.model.loanTitle(it).lowercase() }
     val taken = sorted.filter { !com.tally.book.model.isGiven(it) }
     val given = sorted.filter { com.tally.book.model.isGiven(it) }
     fun sum(l: List<Obj>) = l.sumOf { owed[it.s("id")] ?: 0.0 }

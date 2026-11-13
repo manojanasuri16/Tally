@@ -117,3 +117,19 @@ fun pendingInWords(loan: Obj, amountText: String, count: Int): String =
         }
         t("loan.pending.interest", "Interest pending: {amount} ({periods})", "amount" to amountText, "periods" to periods)
     }
+
+/**
+ * What an entry is called on screen. A person's entry is known by the person: their name leads and the entry's own name
+ * ("Borrowed") follows. A bank or pledged entry leads with its own name ("Home EMI"), the lender after.
+ */
+fun loanTitle(loan: Obj): String {
+    val who = loan.s("lender").trim(); val name = loan.s("name").trim()
+    return if (loan.s("kind") == "hand" && who.isNotEmpty()) who else name.ifEmpty { who }
+}
+
+/** The second line under [loanTitle]: the entry's name under a person, the lender under anything else; "" when there is nothing more to say. */
+fun loanSecond(loan: Obj): String {
+    val who = loan.s("lender").trim(); val name = loan.s("name").trim()
+    return if (loan.s("kind") == "hand" && who.isNotEmpty()) (if (name.equals(who, ignoreCase = true)) "" else name)
+    else if (name.isEmpty()) "" else who
+}

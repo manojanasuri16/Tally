@@ -105,12 +105,12 @@ private fun LoanBody(id: String, d: Detail) {
         }
     }
 
-    SubScreen(loan.s("name")) { pad ->
+    SubScreen(loanTitle(loan)) { pad ->
         Column(
             Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(ScreenPadding),
             verticalArrangement = Arrangement.spacedBy(stackGap()),
         ) {
-            val kindLine = listOf(loanKindLabel(loan), loan.s("lender")).filter { it.isNotBlank() }.joinToString(" · ")
+            val kindLine = listOf(loanKindLabel(loan), loanSecond(loan)).filter { it.isNotBlank() }.joinToString(" · ")
             val subtitle = kindLine + "\n" + addedByLine(loan.s("by"), loan.num("at"), loan.s("updatedBy"), ::memberName) { fmtISODate(isoOfMillis(it)) }
             if (closed) BigFigure(t("loan.closed", "Closed"), null, sub = subtitle, text = fmtISODate(loan.s("closedDate")).ifEmpty { "—" })
             else BigFigure(words.left, v.num("owed"), sub = subtitle)

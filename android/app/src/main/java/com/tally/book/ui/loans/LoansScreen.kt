@@ -122,9 +122,9 @@ private fun readHome(): Home {
     val (shared, priv) = splitPrivate(open, owed)
     val taken = open.filter { !isGiven(it) }
     val kinds = LOAN_KINDS + taken.map { it.s("kind") }.filter { it !in LOAN_KINDS }.distinct()
-    val groups = kinds.map { k -> k to shared.filter { !isGiven(it) && it.s("kind") == k }.sortedBy { it.s("name").lowercase() } }.filter { it.second.isNotEmpty() }
-    val given = open.filter { isGiven(it) }.sortedBy { it.s("name").lowercase() }
-    val givenShared = shared.filter { isGiven(it) }.sortedBy { it.s("name").lowercase() }
+    val groups = kinds.map { k -> k to shared.filter { !isGiven(it) && it.s("kind") == k }.sortedBy { loanTitle(it).lowercase() } }.filter { it.second.isNotEmpty() }
+    val given = open.filter { isGiven(it) }.sortedBy { loanTitle(it).lowercase() }
+    val givenShared = shared.filter { isGiven(it) }.sortedBy { loanTitle(it).lowercase() }
     val closed = all.filter { it.b("closed") }.sortedByDescending { it.s("closedDate") }
     val rows = dueList()
     return Home(totals(), rows.filter { !it.b("given") }, rows.filter { it.b("given") }, groups, givenShared, closed, open.any { isGiven(it) }, priv, all.isNotEmpty(), owed, taken.isNotEmpty(), bookHasOthers())
@@ -236,7 +236,8 @@ private fun DueRow(loan: Obj, date: String, amount: Double, overdue: Boolean, ta
     val label = if (given) t("home.received", "Received") else t("home.pay", "Pay")
     val details: @Composable (Modifier) -> Unit = { m ->
         Column(m.pressable(onClick = onOpen).padding(vertical = 4.dp)) {
-            Text(loan.s("name"), style = Apple.type.body.copy(fontWeight = FontWeight.SemiBold), color = Apple.colors.label)
+            Text(loanTitle(loan), style = Apple.type.body.copy(fontWeight = FontWeight.SemiBold), color = Apple.colors.label)
+            loanSecond(loan).takeIf { it.isNotEmpty() }?.let { Text(it, style = Apple.type.subheadline, color = Apple.colors.secondaryLabel) }
             // an overdue payment is a pill and a red date; the date wraps under the pill when there is no room beside it
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.Center) {
                 if (overdue) Pill(t("home.overdue", "Overdue"), s.negative, Modifier.align(Alignment.CenterVertically))
@@ -269,7 +270,7 @@ private fun LoanGroup(title: String, list: List<Obj>, owed: Map<String, Double>,
         list.forEach { l ->
             item {
                 ARow(
-                    l.s("name"), sub = loanRowSub(l.s("lender"), if (showAdder) memberName(l.s("by")) else null), money = owed[l.s("id")] ?: 0.0, moneyColor = Apple.colors.label,
+                    loanTitle(l), sub = loanRowSub(loanSecond(l), if (showAdder) memberName(l.s("by")) else null), money = owed[l.s("id")] ?: 0.0, moneyColor = Apple.colors.label,
                     chevron = true, onClick = { openLoan(l.s("id")) },
                     trailing = if (l.b("private")) ({ PrivateMark() }) else null,
                 )
@@ -293,7 +294,7 @@ private fun PrivateGroup(p: PrivateLoans, owed: Map<String, Double>) {
         p.loans.forEach { l ->
             item {
                 ARow(
-                    l.s("name"), sub = listOf(loanKindLabel(l), l.s("lender")).filter { it.isNotBlank() }.joinToString(" · "),
+                    loanTitle(l), sub = listOf(loanKindLabel(l), loanSecond(l)).filter { it.isNotBlank() }.joinToString(" · "),
                     money = owed[l.s("id")] ?: 0.0, moneyColor = Apple.colors.label, chevron = true, onClick = { openLoan(l.s("id")) },
                     trailing = { PrivateMark() },
                 )
@@ -330,7 +331,7 @@ private fun ClosedGroup(list: List<Obj>, open: Boolean, toggle: () -> Unit) {
                 list.forEach { l ->
                     item {
                         ARow(
-                            l.s("name"), sub = listOf(loanKindLabel(l), l.s("lender")).filter { it.isNotBlank() }.joinToString(" · "),
+                            loanTitle(l), sub = listOf(loanKindLabel(l), loanSecond(l)).filter { it.isNotBlank() }.joinToString(" · "),
                             value = fmtISODate(l.s("closedDate")).ifEmpty { null }, chevron = true, onClick = { openLoan(l.s("id")) },
                             trailing = if (l.b("private")) ({ PrivateMark() }) else null,
                         )
@@ -362,7 +363,7 @@ fun ShareIntake() {
         when {
             open.isEmpty() -> scope.launch { Dialogs.tell(t("share.noLoan", "Add an entry first, then share the message again.")) }
             open.size == 1 -> { text = shared; loanId = open[0].s("id") }
-            else -> { text = shared; choices = open.sortedBy { it.s("name").lowercase() } }
+            else -> { text = shared; choices = open.sortedBy { loanTitle(it).lowercase() } }
         }
     }
     LaunchedEffect(Unit) { take() }
@@ -374,7 +375,7 @@ fun ShareIntake() {
             InsetSurface {
                 choices.forEachIndexed { i, l ->
                     if (i > 0) Hairline(start = 16.dp)
-                    ARow(l.s("name"), sub = listOf(loanKindLabel(l), l.s("lender")).filter { it.isNotBlank() }.joinToString(" · "), chevron = true, onClick = { loanId = l.s("id") })
+                    ARow(loanTitle(l), sub = listOf(loanKindLabel(l), loanSecond(l)).filter { it.isNotBlank() }.joinToString(" · "), chevron = true, onClick = { loanId = l.s("id") })
                 }
             }
         }

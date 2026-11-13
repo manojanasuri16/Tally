@@ -105,7 +105,7 @@ fun PaymentSheet(loanId: String, existing: Obj?, sms: String? = null, startKind:
         if (editing) t("pay.edit", "Edit payment") else words.log, onDismiss = onDismiss,
         onSave = { save() }, saveLabel = t("dlg.save", "Save"), onDelete = delete,
     ) {
-        Text(theLoan.s("name"), Modifier.padding(start = 4.dp), style = Apple.type.subheadline, color = Apple.colors.secondaryLabel)
+        Text(loanTitle(theLoan), Modifier.padding(start = 4.dp), style = Apple.type.subheadline, color = Apple.colors.secondaryLabel)
         MoneyField(amount, { amount = it; amountTouched = true; error = null }, if (given) t("pay.amount.given", "Amount received") else t("pay.amount", "Amount paid"))
         DateField(date, { date = it; error = null }, t("pay.date", "Date"))
         // one kind of payment (a no-interest entry: part repayments only) needs no question

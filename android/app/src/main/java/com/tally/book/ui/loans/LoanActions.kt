@@ -42,7 +42,7 @@ fun RateChangeSheet(loanId: String, onDismiss: () -> Unit) {
     }
 
     EditSheet(t("loan.rateChange.title", "Rate changed"), onDismiss, onSave = { save() }, saveEnabled = rate.isNotBlank()) {
-        Text(theLoan.s("name"), Modifier.padding(start = 4.dp), style = Apple.type.subheadline, color = Apple.colors.secondaryLabel)
+        Text(loanTitle(theLoan), Modifier.padding(start = 4.dp), style = Apple.type.subheadline, color = Apple.colors.secondaryLabel)
         DateField(from, { from = it; error = null }, t("loan.rateChange.from", "New rate starts on"))
         TextInput(rate, { rate = decimalOnly(it); error = null }, t("loan.rateChange.rate", "New interest rate (% a year)"), keyboard = KeyboardType.Decimal, placeholder = "0")
         Text(t("loan.rateChange.emiAsk", "What happens to the payment?"), Modifier.padding(start = 14.dp), style = Apple.type.footnote, color = Apple.colors.secondaryLabel)
@@ -77,7 +77,7 @@ fun RenewSheet(loanId: String, onDismiss: () -> Unit) {
     }
 
     EditSheet(t("loan.renew.title", "Renewed"), onDismiss, onSave = { save() }, saveEnabled = until.isNotEmpty()) {
-        Text(theLoan.s("name"), Modifier.padding(start = 4.dp), style = Apple.type.subheadline, color = Apple.colors.secondaryLabel)
+        Text(loanTitle(theLoan), Modifier.padding(start = 4.dp), style = Apple.type.subheadline, color = Apple.colors.secondaryLabel)
         DateField(on, {
             on = it; error = null
             if (!untilTouched) until = LoanFormRules.suggestRenewal(theLoan, it)
