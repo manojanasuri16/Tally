@@ -256,7 +256,7 @@ fun validateLoan(draft: Obj): String? {
         if (draft.num("received") > draft.num("principal")) return t("loan.err.received.more", "The amount received cannot be more than the amount itself.")
     } else {
         val e = draft.s("interestEvery")
-        if (e.isNotEmpty() && e != "month" && e != "year") return t("loan.err.every", "Please choose whether interest is paid every month or every year.")
+        if (e.isNotEmpty() && e !in INTEREST_EVERY) return t("loan.err.every", "Please choose whether interest is paid every month or every year.")
     }
     if (kind == "gold") {
         val p = draft.s("pledge")

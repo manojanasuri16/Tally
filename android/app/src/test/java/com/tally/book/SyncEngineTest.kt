@@ -171,7 +171,8 @@ class SyncEngineTest {
         for (json in openAll(a.db.o("family")!!)) {
             val r = JsonCodec.parseObj(json).o("r")!!
             if (r["id"] in setOf("l1", "p1", "f1")) assertEquals(setOf("id", "deleted", "updatedAt", "updatedBy"), r.keys)
-            assertFalse(json.contains("SBI") || json.contains("Secret") || json.contains("4242"))
+            // the private amount, as an amount: a bare "4242" also turned up now and then inside a timestamp
+            assertFalse(json.contains("SBI") || json.contains("Secret") || Regex("\"amount\":4242(\\.0)?[,}]").containsMatchIn(json))
         }
         // A keeps its copies (its own tombstones echo back and are ignored)
         done(a.sync())

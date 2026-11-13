@@ -42,7 +42,7 @@ DB = {
                dueDay,                          // day of the month the instalment falls; monthly loans only
                rateChanges: [ { id, from, rate, emi? } ],   // floating rate: from that date the rate (and, with emi, the instalment) changes; reducing loans only
                // hand and gold:
-               interestEvery,                   // "month" | "year" (hand: default month; gold: default year)
+               interestEvery,                   // "month" | "quarter" (3 months) | "half" (6 months) | "year" (hand: default month; gold: default year)
                rateUnit,                        // "year" (default: percent a year) | "month" (percent a month; "2 rupees interest" = 2)
                repayBy,                         // optional ISO date, after startDate: "to be returned by" (hand) / "repay or renew by" (gold)
                renewals: [ { id, date, from, to, by, at } ],  // renewLoan history: the repayBy moved from `from` to `to` on `date`
@@ -95,7 +95,7 @@ All figures come from the payments actually logged; nothing is added to what is 
 
 ### Interest-only loans (`hand` with a rate, `gold`)
 
-- **Periods** end every month or every year after the start date, on the start date's day (clamped).
+- **Periods** end every 1, 3, 6 or 12 months after the start date, on the start date's day (clamped).
 - A period's interest is worked on what was owed at its start (part repayments dated on or before that day count), so a part repayment lowers the interest from the next period. There is no flat interest here: an old entry saved as "flat" is read the same way.
 - **Interest payments cover periods in order, oldest first;** a partial payment covers part of one. **Pending** (`interestPending`, `periodsPending`): the uncovered part of every period that ended before today, since the start or since the last period fully paid. Interest is counted only for whole periods that ended while something was still owed: when the whole amount is returned mid-period, that last part-period is not worked out (settle it by hand as an interest payment).
 - A loan with `rate: 0` (hand or gold) has no interest: no next due, never pending, never overdue, simply still owed. Its only payment kind is a part repayment, which lowers what is owed.

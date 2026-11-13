@@ -110,7 +110,10 @@ fun instalmentsInWords(count: Int, frequency: String?): String = when (frequency
 fun pendingInWords(loan: Obj, amountText: String, count: Int): String =
     if (isInstalments(loan)) t("loan.pending.emi", "Instalments pending: {amount} ({count})", "amount" to amountText, "count" to count)
     else {
-        val periods = if (interestEvery(loan) == "year") tp("loan.count.year", count, "{n} year", "{n} years")
-        else tp("loan.count.month", count, "{n} month", "{n} months")
+        val periods = when (interestEvery(loan)) {
+            "year" -> tp("loan.count.year", count, "{n} year", "{n} years")
+            "month" -> tp("loan.count.month", count, "{n} month", "{n} months")
+            else -> tp("loan.count.payment", count, "{n} payment", "{n} payments")   // every 3 or 6 months
+        }
         t("loan.pending.interest", "Interest pending: {amount} ({periods})", "amount" to amountText, "periods" to periods)
     }

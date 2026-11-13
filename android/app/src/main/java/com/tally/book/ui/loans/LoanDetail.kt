@@ -180,10 +180,10 @@ private fun NextDue(loan: Obj, v: Obj) {
         if (v.b("noInterest")) {
             item { NoteRow(t("loan.noInterest", "No interest. Pay back when you can.")) }
         } else if (v.b("paidThisPeriod")) {
-            val monthly = isInstalments(loan) || v.s("interestEvery") == "month"
+            val every = if (isInstalments(loan)) "month" else v.s("interestEvery")
             item(Space60) {
                 ARow(
-                    if (monthly) w.paidMonth else w.paidYear,
+                    when (every) { "month" -> w.paidMonth; "year" -> w.paidYear; else -> w.paidSoFar },
                     sub = if (date.isNotEmpty()) t("loan.nextOn", "Next payment: {date}", "date" to dateInWords(date)) else null,
                     icon = Icons.Rounded.CheckCircle, tint = s.positive,
                 )

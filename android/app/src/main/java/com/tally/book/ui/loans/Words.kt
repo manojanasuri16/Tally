@@ -26,8 +26,12 @@ fun rateInWords(rate: Double, unit: String): String {
 }
 
 /** "every month" / "every year". */
-fun everyInWords(every: String): String =
-    if (every == "year") t("loan.every.year", "Every year") else t("loan.every.month", "Every month")
+fun everyInWords(every: String): String = when (every) {
+    "year" -> t("loan.every.year", "Every year")
+    "quarter" -> t("loan.every.quarter", "Every 3 months")
+    "half" -> t("loan.every.half", "Every 6 months")
+    else -> t("loan.every.month", "Every month")
+}
 
 /**
  * The words that turn around for money I gave. One place, so the screens never branch on it: [loanWords] picks the set.
@@ -36,7 +40,7 @@ fun everyInWords(every: String): String =
 class LoanWords(
     val who: String, val whoEg: String, val amount: String, val date: String, val left: String, val log: String,
     val interest: String, val principal: String, val expected: String, val next: String,
-    val paidMonth: String, val paidYear: String, val toReturn: String, val closeAsk: String, val kindHelp: String,
+    val paidMonth: String, val paidYear: String, val paidSoFar: String, val toReturn: String, val closeAsk: String, val kindHelp: String,
 )
 
 fun loanWords(given: Boolean): LoanWords = if (given) LoanWords(
@@ -46,6 +50,7 @@ fun loanWords(given: Boolean): LoanWords = if (given) LoanWords(
     interest = t("pay.kind.interest.given", "Interest received"), principal = t("pay.kind.principal.given", "Got some of the amount back"),
     expected = t("home.expected", "Expected this month"), next = t("loan.next.given", "Expected next"),
     paidMonth = t("loan.paid.month.given", "Received for this month"), paidYear = t("loan.paid.year.given", "Received for this year"),
+    paidSoFar = t("loan.paid.soFar.given", "Received all that is due"),
     toReturn = t("home.toComeBack", "To come back"),
     closeAsk = t("pay.closeAsk.given", "Everything has come back. Close this entry now?"),
     kindHelp = t("loan.kind.given.help", "Money you lent to someone you know"),
@@ -56,6 +61,7 @@ fun loanWords(given: Boolean): LoanWords = if (given) LoanWords(
     interest = t("pay.kind.interest", "Interest"), principal = t("pay.kind.principal.hand", "Returned some of the amount"),
     expected = t("home.due", "Due this month"), next = t("loan.next", "Next payment"),
     paidMonth = t("loan.paid.month", "Paid for this month"), paidYear = t("loan.paid.year", "Paid for this year"),
+    paidSoFar = t("loan.paid.soFar", "Paid all that is due"),
     toReturn = t("home.toReturn", "To be returned"),
     closeAsk = t("pay.closeAsk", "Everything is paid. Close this entry now?"),
     kindHelp = t("loan.kind.hand.help", "Money borrowed from someone you know"),

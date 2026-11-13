@@ -65,7 +65,7 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
     var repayBy by remember { mutableStateOf(existing?.s("repayBy").orEmpty()) }
     val saved = remember { existing?.let { filesOf("loan", it.s("id")) } ?: emptyList() }
     var showDetails by remember { mutableStateOf(editing && (existing?.s("note").orEmpty().isNotBlank() || existing?.s("repayBy").orEmpty().isNotBlank() || saved.isNotEmpty())) }
-    var every by remember { mutableStateOf(existing?.s("interestEvery")?.takeIf { it == "month" || it == "year" }) }
+    var every by remember { mutableStateOf(existing?.s("interestEvery")?.takeIf { it in INTEREST_EVERY }) }
     var grams by remember { mutableStateOf(existing?.let { editText(it.num("grams")) }.orEmpty()) }
     var note by remember { mutableStateOf(existing?.s("note").orEmpty()) }
     var keepPrivate by remember { mutableStateOf(existing?.b("private") ?: false) }
@@ -259,7 +259,7 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
             } else {
                 if (EasyForm.showEvery(easy, kind, hasInterest, extras)) {
                     FieldTitle(t("loan.every", "Interest is paid"))
-                    SegmentedControl(listOf("month" to t("loan.everyMonth", "Every month"), "year" to t("loan.everyYear", "Every year")), effEvery, { every = it })
+                    ChoiceChips(INTEREST_EVERY.map { it to everyInWords(it) }, effEvery, { every = it; error = null })
                 }
                 if (LoanFormRules.showGrams(kind, pledge)) TextInput(grams, { grams = decimalOnly(it) }, t("loan.grams", "Gold pledged (grams)"), keyboard = KeyboardType.Decimal, placeholder = "0")
                 if (LoanFormRules.repayByInMain(kind, pledge)) {
@@ -320,8 +320,8 @@ private fun planHelp(plan: String, given: Boolean): String = when (plan) {
         else t("loan.plan.none.help", "Pay it back when you can, all at once or a little at a time. Log each part you pay and the amount goes down.")
     "instalments" -> if (given) t("loan.plan.instalments.help.given", "A fixed amount comes back every week or month until it is cleared.")
         else t("loan.plan.instalments.help", "A fixed amount every week or month until it is cleared, like ₹1,000 every week for 12 weeks.")
-    else -> if (given) t("loan.plan.interest.help.given", "They pay interest every month. The amount itself comes back later, all at once or in parts.")
-        else t("loan.plan.interest.help", "Pay interest every month. The amount itself is returned later, all at once or in parts.")
+    else -> if (given) t("loan.plan.interest.help.given", "They pay only the interest. The amount itself comes back later, all at once or in parts.")
+        else t("loan.plan.interest.help", "Pay only the interest. The amount itself is returned later, all at once or in parts.")
 }
 
 /** "Interest: ₹1,000 every month (₹2 on every ₹100)" for the rate typed so far; null until there is an amount and a rate. */
@@ -330,7 +330,12 @@ private fun interestHint(draft: Obj): String? {
     if (principal <= 0 || rate <= 0) return null
     val each = periodInterest(draft, principal)
     if (each <= 0) return null
-    val every = if (interestEvery(draft) == "year") t("loan.interestHint.year", "every year") else t("loan.interestHint.month", "every month")
+    val every = when (interestEvery(draft)) {
+        "year" -> t("loan.interestHint.year", "every year")
+        "quarter" -> t("loan.interestHint.quarter", "every 3 months")
+        "half" -> t("loan.interestHint.half", "every 6 months")
+        else -> t("loan.interestHint.month", "every month")
+    }
     val line = t("loan.interestHint", "Interest: {amt} {every}", "amt" to amtMask(each), "every" to every)
     return if (draft.s("rateUnit") == "month")
         line + " " + t("loan.interestHint.rupees", "(₹{r} on every ₹100 a month)", "r" to fmtIN(rate, 2))

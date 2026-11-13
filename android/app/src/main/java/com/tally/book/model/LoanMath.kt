@@ -86,17 +86,23 @@ internal fun instalmentBasis(loan: Obj): Obj {
     return b
 }
 
-/** The period a hand or gold loan pays interest in: "month" or "year". */
+/** How often a hand or gold loan pays interest: every month, 3 months ("quarter"), 6 months ("half") or year. */
+val INTEREST_EVERY = listOf("month", "quarter", "half", "year")
+
+/** The period a hand or gold loan pays interest in, one of [INTEREST_EVERY] (gold defaults to a year, the rest to a month). */
 fun interestEvery(loan: Obj): String {
     val e = loan.s("interestEvery")
-    return if (e == "month" || e == "year") e else if (loan.s("kind") == "gold") "year" else "month"
+    return if (e in INTEREST_EVERY) e else if (loan.s("kind") == "gold") "year" else "month"
 }
+
+/** The months in one interest period: 1, 3, 6 or 12. */
+fun everyMonths(every: String): Int = when (every) { "quarter" -> 3; "half" -> 6; "year" -> 12; else -> 1 }
 
 /** Interest for one period on [base], following rateUnit ("year" default: percent a year; "month": percent a month); whole rupees. */
 fun periodInterest(loan: Obj, base: Double): Double {
     val rate = loan.num("rate") / 100
     val perYear = if (loan.s("rateUnit") == "month") rate * 12 else rate
-    return jsRound(base * (if (interestEvery(loan) == "month") perYear / 12 else perYear))
+    return jsRound(base * when (val e = interestEvery(loan)) { "month" -> perYear / 12; "year" -> perYear; else -> perYear * everyMonths(e) / 12 })
 }
 
 /**
@@ -314,7 +320,7 @@ internal fun calcInterestOnly(loan: Obj, pays: List<Obj>, start: LocalDate, toda
     if (noInterest) return LoanCalc(bal, paidTotal, paidPrincipal, paidInterest, emptyList(), false)
 
     fun owedOn(d: LocalDate): Double = max(0.0, p0 - returns.filter { it.first == null || !it.first!!.isAfter(d) }.sumOf { it.second })
-    val step = if (interestEvery(loan) == "month") 1 else 12
+    val step = everyMonths(interestEvery(loan))
     val sk = monthKey(start)
     val limit = slotLimit(today)
     val slots = ArrayList<Slot>()
@@ -350,7 +356,7 @@ fun suggestPaidUpTo(draft: Obj, today: LocalDate = Clock.today()): String {
         var k = 1
         while (k < 100000 && (n <= 0 || k <= n)) { val d = sched.due(k); if (!d.isBefore(today)) break; last = d; k++ }
     } else if (draft.s("kind") in setOf("hand", "gold") && draft.num("rate") > 0) {
-        val step = if (interestEvery(draft) == "month") 1 else 12
+        val step = everyMonths(interestEvery(draft))
         var k = 1
         while (k < 5000) { val d = clampDay(addMonths(monthKey(start), k * step), start.dayOfMonth); if (!d.isBefore(today)) break; last = d; k++ }
     }

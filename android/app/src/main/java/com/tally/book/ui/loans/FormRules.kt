@@ -1,6 +1,7 @@
 package com.tally.book.ui.loans
 
 import com.tally.book.core.*
+import com.tally.book.model.INTEREST_EVERY
 import com.tally.book.model.frequencyOf
 import com.tally.book.model.hasRepayBy
 import java.time.LocalDate
@@ -94,7 +95,7 @@ object EasyForm {
             method = kind == "bank" && existing.s("interestMethod") == "flat",
             frequency = kind == "bank" && frequencyOf(existing) != "month",
             dueDay = kind == "bank" && frequencyOf(existing) == "month" && day in 1..31 && start != null && day != start.dayOfMonth,
-            every = kind != "bank" && (every == "month" || every == "year") && every != (if (kind == "gold") "year" else "month"),
+            every = kind != "bank" && every in INTEREST_EVERY && every != (if (kind == "gold") "year" else "month"),
             paidUpTo = existing.s("paidUpTo").isNotEmpty(),
         )
     }
