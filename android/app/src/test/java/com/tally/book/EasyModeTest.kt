@@ -164,9 +164,9 @@ class EasyModeTest {
         assertTrue(x.method)
         assertTrue(EasyForm.showMethod(true, "bank", true, x))
         assertFalse(EasyForm.showFrequency(true, "bank", x))
-        // an old flat entry from a person keeps the choice, so it can be set back
+        // an old entry from a person saved as flat never shows the choice: interest-only is always on what is still owed
         val h = EasyForm.extrasOf(loan("kind" to "hand", "interestMethod" to "flat", "startDate" to "2026-03-15"))
-        assertTrue(EasyForm.showMethod(false, "hand", true, h))
+        assertFalse(h.method); assertFalse(EasyForm.showMethod(false, "hand", true, h))
     }
 
     @Test fun aWeeklyLoanKeepsItsFrequencyVisible() {

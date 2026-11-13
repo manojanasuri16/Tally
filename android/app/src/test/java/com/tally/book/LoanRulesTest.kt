@@ -75,16 +75,16 @@ class LoanRulesTest {
 
     // Interest-only, 1,00,000 at 2% a month from 10 Sep; 40,000 returned on 1 Oct.
     // Reducing: period to 10 Oct started on 1,00,000 → 2,000; period to 10 Nov started 10 Oct on 60,000 → 1,200; from now 1,200.
-    // Flat: both 2,000 (on the full 1,00,000), and it stays 2,000 until the loan is closed.
-    @Test fun flatInterestOnlyStaysOnTheOriginalAmount() {
+    // Interest-only entries have no flat interest: an old one saved as "flat" is charged on what is still owed, like any other.
+    @Test fun interestOnlyIsAlwaysOnWhatIsStillOwed() {
         val red = hand(100000.0, 2.0, "2026-09-10")
         val flat = hand(100000.0, 2.0, "2026-09-10", "interestMethod" to "flat")
         for (l in listOf(red, flat)) pay(l, "2026-10-01", 40000.0, "principal")
         val r = v(red); val f = v(flat)
         assertEquals(60000.0, r.num("owed"), 0.0); assertEquals(60000.0, f.num("owed"), 0.0)
-        assertEquals(3200.0, r.num("interestPending"), 0.0); assertEquals(4000.0, f.num("interestPending"), 0.0)
-        assertEquals(1200.0, r.num("periodInterest"), 0.0); assertEquals(2000.0, f.num("periodInterest"), 0.0)
-        assertEquals(2000.0, suggestPayment(loan(flat.s("id"))!!, today).num("amount"), 0.0)
+        assertEquals(3200.0, r.num("interestPending"), 0.0); assertEquals(3200.0, f.num("interestPending"), 0.0)
+        assertEquals(1200.0, r.num("periodInterest"), 0.0); assertEquals(1200.0, f.num("periodInterest"), 0.0)
+        assertEquals("reducing", f.s("interestMethod"))
         assertEquals("2% a month, on the full amount", rateWithMethodInWords(2.0, "month", "flat"))
         assertEquals("12% a year, on the amount still owed", rateWithMethodInWords(12.0, "year", "reducing"))
         assertEquals("On the amount still owed", interestMethodLabel("reducing")); assertEquals("On the full amount", interestMethodLabel("flat"))

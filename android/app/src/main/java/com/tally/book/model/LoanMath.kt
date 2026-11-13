@@ -15,8 +15,8 @@ import kotlin.math.pow
  * Two shapes of loan:
  *  - instalment loans (`bank`): a fixed instalment every month / fortnight / week / day, reducing-balance or flat interest,
  *    with optional rate changes from a date. EMI payments cover the instalments in order, oldest first.
- *  - interest-only loans (`hand` with a rate, `gold`): interest every month or year on what is still owed (reducing) or on the
- *    original amount (flat); the principal is returned when it is returned. Interest payments cover the periods in order, oldest first.
+ *  - interest-only loans (`hand` with a rate, `gold`): interest every month or year on what is still owed (never flat);
+ *    the principal is returned when it is returned. Interest payments cover the periods in order, oldest first.
  *
  * A "slot" is one instalment or one interest period that is not fully paid yet: its due date and what is still to pay on it.
  */
@@ -25,8 +25,12 @@ val INTEREST_METHODS = listOf("reducing", "flat")
 val FREQUENCIES = listOf("month", "fortnight", "week", "day")
 val PLEDGES = listOf("gold", "lic", "fd", "land", "none", "other")
 
-/** "reducing" (default: interest on what is still owed) or "flat" (interest on the original amount for the whole loan). */
-fun interestMethod(loan: Obj): String = if (loan.s("interestMethod") == "flat") "flat" else "reducing"
+/**
+ * "reducing" (default: interest on what is still owed) or "flat" (interest on the original amount for the whole loan).
+ * Flat is for bank loans only: an interest-only entry (from a person, against something pledged) always charges interest on
+ * what is still owed, even if an old copy says "flat".
+ */
+fun interestMethod(loan: Obj): String = if (loan.s("kind") == "bank" && loan.s("interestMethod") == "flat") "flat" else "reducing"
 
 /** How often a bank loan's instalment falls: "month" (default), "fortnight", "week" or "day". */
 fun frequencyOf(loan: Obj): String = loan.s("frequency").takeIf { it in FREQUENCIES } ?: "month"

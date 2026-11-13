@@ -92,7 +92,7 @@ fun LoanSheet(existing: Obj?, onDismiss: () -> Unit, onSaved: (String) -> Unit) 
         d["principal"] = principal
         d["startDate"] = startDate
         d["rate"] = if (!hasInterest) 0.0 else n(rate)
-        if (hasInterest && (kind == "bank" || method == "flat")) d["interestMethod"] = method else d.remove("interestMethod")
+        if (hasInterest && kind == "bank") d["interestMethod"] = method else d.remove("interestMethod")
         d["note"] = note.trim()
         d["private"] = keepPrivate
         if (kind == "bank") {

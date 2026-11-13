@@ -91,7 +91,7 @@ object EasyForm {
         val day = existing.num("dueDay").toInt()
         val every = existing.s("interestEvery")
         return Extras(
-            method = existing.s("interestMethod") == "flat",
+            method = kind == "bank" && existing.s("interestMethod") == "flat",
             frequency = kind == "bank" && frequencyOf(existing) != "month",
             dueDay = kind == "bank" && frequencyOf(existing) == "month" && day in 1..31 && start != null && day != start.dayOfMonth,
             every = kind != "bank" && (every == "month" || every == "year") && every != (if (kind == "gold") "year" else "month"),
@@ -99,12 +99,9 @@ object EasyForm {
         )
     }
 
-    /**
-     * Reducing/Flat is a question for instalment loans only. Interest-only entries (from a person, against something pledged) pay
-     * interest on what is still owed; the choice shows there only on an old entry already set to flat, so it can be set back.
-     */
+    /** Reducing/Flat is a question for bank loans only. Interest-only entries (from a person, against something pledged) pay interest on what is still owed. */
     fun showMethod(easy: Boolean, kind: String, hasInterest: Boolean, x: Extras): Boolean =
-        hasInterest && (kind == "bank" || x.method) && (!easy || x.method)
+        kind == "bank" && hasInterest && (!easy || x.method)
     fun showFrequency(easy: Boolean, kind: String, x: Extras): Boolean = LoanFormRules.showFrequency(kind) && (!easy || x.frequency)
     fun showDueDay(easy: Boolean, kind: String, frequency: String, x: Extras): Boolean = LoanFormRules.showDueDay(kind, frequency) && (!easy || x.dueDay)
     fun showEvery(easy: Boolean, kind: String, hasInterest: Boolean, x: Extras): Boolean = kind != "bank" && hasInterest && (!easy || x.every)
